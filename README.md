@@ -3,8 +3,8 @@
 
 This OpenShift Tekton pipeline automates the process of:
 1. Downloading a model from **Hugging Face**.
-2. Preparing and packaging it as an **ModelCar**.
-3. Pushing the image to **Quay.io** securely using authentication from an **OpenShift Secret**.
+2. Preparing and packaging it as a **ModelCar**.
+3. Pushing the image to an image registry securely using authentication from an **OpenShift Secret**.
 
 ---
 
@@ -12,13 +12,15 @@ This OpenShift Tekton pipeline automates the process of:
 Before using this pipeline, ensure you have:
 - An **OpenShift** cluster with **Tekton Pipelines** installed.
 - The **`tkn` CLI** installed for interacting with Tekton Pipelines.
-- A **Quay.io account** with permissions to push images.
+- An image registry e.g. quay.io with permissions to push images.
 
 ---
 
 ## **Installation**
 
 ### **1. Create the Required OpenShift Secret**
+
+This example is for quay.io
 
 To push images to **Quay.io**, you need to create an **OpenShift Secret** that stores your authentication credentials. Follow these steps to generate and configure the secret:  
 
@@ -88,6 +90,6 @@ You can manually trigger the pipeline using the following command (replace quay.
 tkn pipeline start modelcar-pipeline \
     -p HUGGINGFACE_MODEL=ibm-granite/granite-3.2-2b-instruct \
     -p OCI_IMAGE=quay.io/hayesphilip/modelcar:latest \
-    -w name=shared-workspace,volumeClaimTemplate=modelcar-storage \
+    -w name=shared-workspace,claimName=modelcar-storage \
     -w name=quay-auth-workspace,secret=quay-auth
 ```

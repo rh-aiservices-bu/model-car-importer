@@ -30,6 +30,8 @@ spec:
               mkdir -p /workspace/shared-workspace/model
               python download_model.py -m $(params.HUGGINGFACE_MODEL) -t /workspace/shared-workspace/model
               echo "Download complete!"
+              echo "Removing cache"
+              rm -r /workspace/shared-workspace/model/.cache
       params:
         - name: HUGGINGFACE_MODEL
           value: $(params.HUGGINGFACE_MODEL)
