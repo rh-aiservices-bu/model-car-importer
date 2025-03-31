@@ -1,0 +1,110 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: modelcar-pipeline
+spec:
+  params:
+    - name: HUGGINGFACE_MODEL
+      type: string
+      description: "The Hugging Face model repository (e.g., ibm-granite/granite-3.2-2b-instruct)"
+    - name: OCI_IMAGE
+      type: string
+      description: "The OCI image destination (e.g., quay.io/my-user/my-modelcar)"
+  workspaces:
+    - name: shared-workspace
+    - name: quay-auth-workspace  # Authentication workspace
+  tasks:
+    - name: pull-model-from-huggingface
+      taskSpec:
+        workspaces:
+          - name: shared-workspace
+        params:
+          - name: HUGGINGFACE_MODEL
+        steps:
+          - name: download-model
+            image: quay.io/redhat-ai-services/huggingface-modelcar-builder:latest
+            script: |
+              #!/bin/sh
+              set -e
+              echo "Downloading model from Hugging Face..."
+              mkdir -p /workspace/shared-workspace/model
+              python download_model.py -m $(params.HUGGINGFACE_MODEL) -t /workspace/shared-workspace/model
+              echo "Download complete!"
+      params:
+        - name: HUGGINGFACE_MODEL
+          value: $(params.HUGGINGFACE_MODEL)
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+
+    - name: build-and-push-modelcar
+      taskSpec:
+        workspaces:
+          - name: shared-workspace
+          - name: quay-auth-workspace  # New authentication workspace
+        params:
+          - name: OCI_REGISTRY_SOURCE
+          - name: OCI_REGISTRY_DESTINATION
+        steps:
+          - name: build-modelcar
+            image: quay.io/fedora/fedora:latest
+            script: |
+              #!/bin/sh
+              set -e
+
+              # Install dependencies
+              echo "Installing dependencies..."
+              dnf install -y golang git make python3-pip skopeo
+              pip3 install poetry
+
+              # Install OLOT
+              echo "Checking if OLOT already exists..."
+              if [ -d "/workspace/shared-workspace/olot" ]; then
+                echo "Removing existing OLOT directory..."
+                rm -rf /workspace/shared-workspace/olot
+              fi
+
+              echo "Cloning and Installing OLOT..."
+              git clone https://github.com/containers/olot.git /workspace/shared-workspace/olot
+              cd /workspace/shared-workspace/olot
+              make
+              make install
+              export PATH=$PATH:/usr/local/bin
+              echo "OLOT installed successfully!"
+
+              # Set variables
+              IMAGE_DIR=download
+              MODEL_DIR=/workspace/shared-workspace/model
+              echo "Downloading OCI image from $(params.OCI_REGISTRY_SOURCE)..."
+              rm -rf $IMAGE_DIR
+
+              # Download the OCI image
+              skopeo copy --multi-arch all  --remove-signatures  \
+                docker://$(params.OCI_REGISTRY_SOURCE) \
+                oci:${IMAGE_DIR}:latest
+
+              # Add files to OCI image using olot
+              echo "Finding and appending model files to OCI image..."
+              find $MODEL_DIR -name "*" -print0 | while IFS= read -r -d '' file; do
+                echo "Adding $file to OCI image..."
+                poetry run olot $IMAGE_DIR  "$file"
+              done
+
+              # Authenticate using the secret
+              echo "Pushing updated OCI image to $(params.OCI_REGISTRY_DESTINATION)..."
+              skopeo copy --multi-arch all \
+                --authfile /workspace/quay-auth-workspace/.dockerconfigjson \
+                oci:${IMAGE_DIR}:latest \
+                docker://$(params.OCI_REGISTRY_DESTINATION)
+      params:
+        - name: OCI_REGISTRY_SOURCE
+          value: "registry.access.redhat.com/ubi8-micro@sha256:eae27ba458e682d6d830f6c77c9e3a4c33cf1718461397b741e674d9d37450f3"
+        - name: OCI_REGISTRY_DESTINATION
+          value: $(params.OCI_IMAGE)
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+        - name: quay-auth-workspace  # Attach authentication workspace
+          workspace: quay-auth-workspace
+      runAfter:
+        - pull-model-from-huggingface
