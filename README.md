@@ -76,6 +76,15 @@ Apply the pipeline YAML to your OpenShift project:
 oc apply -f modelcar-storage.yaml
 ```
 
+### 4. Create a secret for your Huggingface token
+
+If the model you are downloading from huggingface requires a token, create a secret with:
+
+```
+oc create secret generic huggingface-secret \
+  --from-literal=HUGGINGFACE_TOKEN=your_actual_token_here
+```
+
 ---
 
 ## Usage Instructions

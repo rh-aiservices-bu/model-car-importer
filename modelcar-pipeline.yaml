@@ -29,7 +29,7 @@ spec:
             default: ""  # Default to empty string (no filtering)
         steps:
           - name: download-model
-            image: quay.io/redhat-ai-services/huggingface-modelcar-builder:latest
+            image: quay.io/hayesphilip/huggingface-modelcar-builder:latest
             env:
               - name: HUGGINGFACE_TOKEN
                 valueFrom:
@@ -43,7 +43,7 @@ spec:
               echo "Downloading model from Hugging Face..."
               mkdir -p /workspace/shared-workspace/model
               # Build the download command dynamically based on whether allow-patterns is set
-              CMD="python download_model.py -m $(params.HUGGINGFACE_MODEL) -t /workspace/shared-workspace/model"
+              CMD="python download_model.py -m $(params.HUGGINGFACE_MODEL) -t /workspace/shared-workspace/model --token $HUGGINGFACE_TOKEN"
               # Only add --allow-patterns if HUGGINGFACE_ALLOW_PATTERNS is set (not empty)
               if [ ! -z "$(params.HUGGINGFACE_ALLOW_PATTERNS)" ]; then
                 CMD="$CMD --allow-patterns $(params.HUGGINGFACE_ALLOW_PATTERNS)"

@@ -7,7 +7,7 @@ spec:
     name: modelcar-pipeline
   params:
     - name: HUGGINGFACE_MODEL
-      value: "ibm-granite/granite-3.2-2b-instruct"  # Update with your model
+      value: "meta-llama/Llama-3.1-8B-Instruct"  # Update with your model
     - name: HUGGINGFACE_ALLOW_PATTERNS
       value: ""  # Optional: Change or remove to download all files
     - name: OCI_IMAGE
