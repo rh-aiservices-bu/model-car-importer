@@ -12,7 +12,7 @@ spec:
       description: "The OCI image destination (e.g., quay.io/my-user/my-modelcar)"
     - name: HUGGINGFACE_ALLOW_PATTERNS
       type: string
-      description: 'Optional array of file patterns to allow default: ["*.safetensors", "*.json", "*.txt"]'  # Default to empty string (no filtering)
+      description: 'Optional array of file patterns to allow default: "*.safetensors", "*.json", "*.txt"'  # Default to empty string (no filtering)
       default: ""
   workspaces:
     - name: shared-workspace
@@ -50,8 +50,11 @@ spec:
               fi
               eval $CMD
               echo "Download complete!"
-              echo "Removing cache"
-              rm -r /workspace/shared-workspace/model/.cache
+              # Remove cache only if it exists
+              if [ -d /workspace/shared-workspace/model/.cache ]; then
+                echo "Removing cache"
+                rm -r /workspace/shared-workspace/model/.cache
+              fi
       params:
         - name: HUGGINGFACE_MODEL
           value: $(params.HUGGINGFACE_MODEL)

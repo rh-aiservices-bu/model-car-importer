@@ -9,7 +9,7 @@ spec:
     - name: HUGGINGFACE_MODEL
       value: "meta-llama/Llama-3.1-8B-Instruct"  # Update with your model
     - name: HUGGINGFACE_ALLOW_PATTERNS
-      value: ""  # Optional: Change or remove to download all files
+      value: '"*.safetensors", "*.json", "*.txt"'  # Optional: Change or remove to download all files
     - name: OCI_IMAGE
       value: "quay.io/hayesphilip/modelcar:latest"  # Destination OCI image
   workspaces:
