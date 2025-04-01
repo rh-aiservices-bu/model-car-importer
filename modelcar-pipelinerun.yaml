@@ -1,0 +1,24 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: modelcar-pipelinerun
+spec:
+  pipelineRef:
+    name: modelcar-pipeline
+  params:
+    - name: HUGGINGFACE_MODEL
+      value: "ibm-granite/granite-3.2-2b-instruct"  # Update with your model
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      value: ""  # Optional: Change or remove to download all files
+    - name: OCI_IMAGE
+      value: "quay.io/hayesphilip/modelcar:latest"  # Destination OCI image
+  workspaces:
+    - name: shared-workspace
+      persistentVolumeClaim:
+        claimName: modelcar-storage  # Ensure this PVC is created before running
+    - name: quay-auth-workspace
+      secret:
+        secretName: quay-auth
+        items:
+          - key: .dockerconfigjson
+            path: .dockerconfigjson

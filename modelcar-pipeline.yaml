@@ -10,6 +10,10 @@ spec:
     - name: OCI_IMAGE
       type: string
       description: "The OCI image destination (e.g., quay.io/my-user/my-modelcar)"
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      type: string
+      description: 'Optional array of file patterns to allow default: ["*.safetensors", "*.json", "*.txt"]'  # Default to empty string (no filtering)
+      default: ""
   workspaces:
     - name: shared-workspace
     - name: quay-auth-workspace  # Authentication workspace
@@ -20,15 +24,31 @@ spec:
           - name: shared-workspace
         params:
           - name: HUGGINGFACE_MODEL
+          - name: HUGGINGFACE_ALLOW_PATTERNS
+            type: string
+            default: ""  # Default to empty string (no filtering)
         steps:
           - name: download-model
             image: quay.io/redhat-ai-services/huggingface-modelcar-builder:latest
+            env:
+              - name: HUGGINGFACE_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: huggingface-secret
+                    key: HUGGINGFACE_TOKEN
+                    optional: true
             script: |
               #!/bin/sh
               set -e
               echo "Downloading model from Hugging Face..."
               mkdir -p /workspace/shared-workspace/model
-              python download_model.py -m $(params.HUGGINGFACE_MODEL) -t /workspace/shared-workspace/model
+              # Build the download command dynamically based on whether allow-patterns is set
+              CMD="python download_model.py -m $(params.HUGGINGFACE_MODEL) -t /workspace/shared-workspace/model"
+              # Only add --allow-patterns if HUGGINGFACE_ALLOW_PATTERNS is set (not empty)
+              if [ ! -z "$(params.HUGGINGFACE_ALLOW_PATTERNS)" ]; then
+                CMD="$CMD --allow-patterns $(params.HUGGINGFACE_ALLOW_PATTERNS)"
+              fi
+              eval $CMD
               echo "Download complete!"
               echo "Removing cache"
               rm -r /workspace/shared-workspace/model/.cache
