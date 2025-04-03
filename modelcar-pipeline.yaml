@@ -12,11 +12,11 @@ spec:
       description: "The OCI image destination (e.g., quay.io/my-user/my-modelcar)"
     - name: HUGGINGFACE_ALLOW_PATTERNS
       type: string
-      description: 'Optional array of file patterns to allow default: "*.safetensors", "*.json", "*.txt"'  # Default to empty string (no filtering)
+      description: 'Optional array of file patterns to allow default: "*.safetensors", "*.json", "*.txt"'
       default: ""
   workspaces:
     - name: shared-workspace
-    - name: quay-auth-workspace  # Authentication workspace
+    - name: quay-auth-workspace
   tasks:
     - name: pull-model-from-huggingface
       taskSpec:
@@ -26,7 +26,7 @@ spec:
           - name: HUGGINGFACE_MODEL
           - name: HUGGINGFACE_ALLOW_PATTERNS
             type: string
-            default: ""  # Default to empty string (no filtering)
+            default: ""
         steps:
           - name: download-model
             image: quay.io/hayesphilip/huggingface-modelcar-builder:latest
@@ -42,15 +42,12 @@ spec:
               set -e
               echo "Downloading model from Hugging Face..."
               mkdir -p /workspace/shared-workspace/model
-              # Build the download command dynamically based on whether allow-patterns is set
               CMD="python download_model.py -m $(params.HUGGINGFACE_MODEL) -t /workspace/shared-workspace/model --token $HUGGINGFACE_TOKEN"
-              # Only add --allow-patterns if HUGGINGFACE_ALLOW_PATTERNS is set (not empty)
               if [ ! -z "$(params.HUGGINGFACE_ALLOW_PATTERNS)" ]; then
                 CMD="$CMD --allow-patterns $(params.HUGGINGFACE_ALLOW_PATTERNS)"
               fi
               eval $CMD
               echo "Download complete!"
-              # Remove cache only if it exists
               if [ -d /workspace/shared-workspace/model/.cache ]; then
                 echo "Removing cache"
                 rm -r /workspace/shared-workspace/model/.cache
@@ -61,12 +58,22 @@ spec:
       workspaces:
         - name: shared-workspace
           workspace: shared-workspace
+    - name: process
+      taskSpec:
+        steps:
+          - name: echo-process
+            image: python:3.10-slim
+            script: |
+              #!/usr/bin/env python3
+              print("process")
+      runAfter:
+        - pull-model-from-huggingface
 
     - name: build-and-push-modelcar
       taskSpec:
         workspaces:
           - name: shared-workspace
-          - name: quay-auth-workspace  # New authentication workspace
+          - name: quay-auth-workspace
         params:
           - name: OCI_REGISTRY_SOURCE
           - name: OCI_REGISTRY_DESTINATION
@@ -76,19 +83,14 @@ spec:
             script: |
               #!/bin/sh
               set -e
-
-              # Install dependencies
               echo "Installing dependencies..."
               dnf install -y golang git make python3-pip skopeo
               pip3 install poetry
-
-              # Install OLOT
               echo "Checking if OLOT already exists..."
               if [ -d "/workspace/shared-workspace/olot" ]; then
                 echo "Removing existing OLOT directory..."
                 rm -rf /workspace/shared-workspace/olot
               fi
-
               echo "Cloning and Installing OLOT..."
               git clone https://github.com/containers/olot.git /workspace/shared-workspace/olot
               cd /workspace/shared-workspace/olot
@@ -96,26 +98,18 @@ spec:
               make install
               export PATH=$PATH:/usr/local/bin
               echo "OLOT installed successfully!"
-
-              # Set variables
               IMAGE_DIR=download
               MODEL_DIR=/workspace/shared-workspace/model
               echo "Downloading OCI image from $(params.OCI_REGISTRY_SOURCE)..."
               rm -rf $IMAGE_DIR
-
-              # Download the OCI image
-              skopeo copy --multi-arch all  --remove-signatures  \
+              skopeo copy --multi-arch all --remove-signatures \
                 docker://$(params.OCI_REGISTRY_SOURCE) \
                 oci:${IMAGE_DIR}:latest
-
-              # Add files to OCI image using olot
               echo "Finding and appending model files to OCI image..."
               find $MODEL_DIR -name "*" -print0 | while IFS= read -r -d '' file; do
                 echo "Adding $file to OCI image..."
-                poetry run olot $IMAGE_DIR  "$file"
+                poetry run olot $IMAGE_DIR "$file"
               done
-
-              # Authenticate using the secret
               echo "Pushing updated OCI image to $(params.OCI_REGISTRY_DESTINATION)..."
               skopeo copy --multi-arch all \
                 --authfile /workspace/quay-auth-workspace/.dockerconfigjson \
@@ -123,13 +117,23 @@ spec:
                 docker://$(params.OCI_REGISTRY_DESTINATION)
       params:
         - name: OCI_REGISTRY_SOURCE
-          value: "registry.access.redhat.com/ubi8-micro@sha256:eae27ba458e682d6d830f6c77c9e3a4c33cf1718461397b741e674d9d37450f3"
+          value: "registry.access.redhat.com/ubi9-micro@sha256:414cfa255ea10eaef4528a26d5618eb67cf487b635ee20f8f14b9317bfd6a4be"
         - name: OCI_REGISTRY_DESTINATION
           value: $(params.OCI_IMAGE)
       workspaces:
         - name: shared-workspace
           workspace: shared-workspace
-        - name: quay-auth-workspace  # Attach authentication workspace
+        - name: quay-auth-workspace
           workspace: quay-auth-workspace
       runAfter:
-        - pull-model-from-huggingface
+        - process
+    - name: register-with-registry
+      taskSpec:
+        steps:
+          - name: echo-register
+            image: python:3.10-slim
+            script: |
+              #!/usr/bin/env python3
+              print("register")
+      runAfter:
+        - build-and-push-modelcar
