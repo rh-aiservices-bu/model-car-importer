@@ -9,6 +9,12 @@ spec:
     - name: COMPRESS_MODEL
       type: string
       description: "Whether to compress the model using llmcompressor (true/false)"
+    - name: SKIP_TASK
+      type: string
+      description: "Name of this task"
+    - name: SKIP_TASKS
+      type: string
+      description: "Comma-separated list of tasks to skip"
   stepTemplate:
     resources:
       limits:
@@ -26,6 +32,10 @@ spec:
       script: |
         #!/bin/sh
         set -e
+        if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
+          echo "Skipping compress-model task"
+          exit 0
+        fi
         if [ "$(params.COMPRESS_MODEL)" = "true" ]; then
           echo "Compressing model using llmcompressor..."
           echo "Current directory: $(pwd)"

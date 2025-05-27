@@ -6,6 +6,7 @@ This OpenShift pipeline automates:
 - Storing the model in a Persistent Volume.
 - Building a ModelCar OCI image.
 - Pushing the image to an OCI registry (e.g., Quay.io).
+- Registering the model in the OpenShift model registry.
 
 ## 🚀 Prerequisites
 
@@ -124,6 +125,9 @@ Edit the contents of `modelcar-pipelinerun.yaml` to specify:
 - `OCI_IMAGE`: The destination OCI image
 - `HUGGINGFACE_ALLOW_PATTERNS`: File patterns to download (default: "*.safetensors *.json *.txt")
 - `COMPRESS_MODEL`: Set to "true" to enable compression
+- `MODEL_NAME`: Name of the model to register in the model registry
+- `MODEL_VERSION`: Version of the model to register (default: "1.0.0")
+- `SKIP_TASKS`: Comma-separated list of tasks to skip (e.g., "cleanup-workspace,pull-model-from-huggingface,compress-model,process,build-and-push-modelcar")
 
 Example configuration:
 ```yaml
@@ -136,29 +140,27 @@ params:
     value: "*.safetensors *.json *.txt"
   - name: COMPRESS_MODEL
     value: "true"
+  - name: MODEL_NAME
+    value: "ibm-granite/granite-3.2-2b-instruct"
+  - name: MODEL_VERSION
+    value: "1.0.0"
+  - name: SKIP_TASKS
+    value: "cleanup-workspace,pull-model-from-huggingface,compress-model,process,build-and-push-modelcar"
 ```
+
+### Testing Individual Tasks
+
+You can test individual tasks by skipping the others using the `SKIP_TASKS` parameter. For example, to test only the model registration:
+
+```yaml
+params:
+  - name: SKIP_TASKS
+    value: "cleanup-workspace,pull-model-from-huggingface,compress-model,process,build-and-push-modelcar"
+```
+
+This will run only the `register-with-registry` task, skipping all other tasks.
 
 Run the pipeline with:
 ```sh
 oc create -f modelcar-pipelinerun.yaml
-```
-
-## Checking the pipeline status
-
-```sh
-oc get pipelinerun
-```
-
-To view detailed logs:
-```sh
-tkn pipelinerun logs <pipelinerun-name>
-```
-
-## Clean up
-
-To remove completed and failed pods, run the following commands:
-
-```sh
-oc delete pod --field-selector=status.phase==Succeeded
-oc delete pod --field-selector=status.phase==Failed
 ```
