@@ -2,6 +2,8 @@
 
 A Tekton pipeline for downloading models from Hugging Face, optionally compressing them, and building them into OCI images.
 
+![Pipeline Diagram](assets/pipeline.png)
+
 ## Features
 
 - Downloads models from Hugging Face
