@@ -91,16 +91,6 @@ spec:
           workspace: shared-workspace
       runAfter:
         - pull-model-from-huggingface
-    - name: process
-      taskSpec:
-        steps:
-          - name: echo-process
-            image: python:3.10-slim
-            script: |
-              #!/usr/bin/env python3
-              print("process")
-      runAfter:
-        - compress-model
 
     - name: build-and-push-modelcar
       taskSpec:
@@ -159,7 +149,7 @@ spec:
         - name: quay-auth-workspace
           workspace: quay-auth-workspace
       runAfter:
-        - process
+        - compress-model
     - name: register-with-registry
       taskSpec:
         steps:

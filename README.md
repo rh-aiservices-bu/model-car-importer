@@ -1,8 +1,8 @@
-
 # ModelCar Pipeline for OpenShift
 
 This OpenShift pipeline automates:
 - Downloading a model from Hugging Face.
+- Optionally compressing the model using GPTQ quantization.
 - Storing the model in a Persistent Volume.
 - Building a ModelCar OCI image.
 - Pushing the image to an OCI registry (e.g., Quay.io).
@@ -12,6 +12,7 @@ This OpenShift pipeline automates:
 Ensure you have:
 1. **OpenShift CLI (`oc`) installed** - [Install OpenShift CLI](https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html)
 2. **OpenShift Pipelines (Tekton) installed**
+3. **GPU-enabled nodes** - Required for model compression
 
 ---
 
@@ -87,21 +88,70 @@ oc create secret generic huggingface-secret \
 
 ---
 
+## Model Compression
+
+The pipeline includes an optional model compression step using GPTQ quantization. This can significantly reduce the model size while maintaining reasonable performance.
+
+### Compression Details
+
+The compression process:
+1. Uses GPTQ (Generative Pre-trained Transformer Quantization) with W4A16 scheme
+2. Quantizes linear layers to 4-bit precision while keeping activations in 16-bit
+3. Preserves the original model in a backup directory (`model_original`)
+4. Automatically calculates and reports size reduction statistics
+
+### Compression Parameters
+
+The compression is configured with the following parameters:
+- Group size: 16 (for quantization granularity)
+- Calibration samples: 16 per GPU
+- Maximum sequence length: 64 (for calibration)
+- Memory per GPU: 16GB
+
+### Resource Requirements
+
+Compression requires:
+- NVIDIA GPUs (4 GPUs recommended)
+- 24GB memory per GPU
+- 1 CPU core per GPU
+
+---
+
 ## Usage Instructions
 
-Edit the contents of modelcar-pipelinerun.yaml to specify HUGGINGFACE_MODEL you wish to download and the OCI_IMAGE you are pushing the modelcal image to.
+Edit the contents of `modelcar-pipelinerun.yaml` to specify:
+- `HUGGINGFACE_MODEL`: The model to download from Hugging Face
+- `OCI_IMAGE`: The destination OCI image
+- `HUGGINGFACE_ALLOW_PATTERNS`: File patterns to download (default: "*.safetensors *.json *.txt")
+- `COMPRESS_MODEL`: Set to "true" to enable compression
+
+Example configuration:
+```yaml
+params:
+  - name: HUGGINGFACE_MODEL
+    value: "ibm-granite/granite-3.2-2b-instruct"
+  - name: OCI_IMAGE
+    value: "quay.io/my-user/my-modelcar"
+  - name: HUGGINGFACE_ALLOW_PATTERNS
+    value: "*.safetensors *.json *.txt"
+  - name: COMPRESS_MODEL
+    value: "true"
+```
 
 Run the pipeline with:
-
 ```sh
 oc create -f modelcar-pipelinerun.yaml
-
 ```
 
 ## Checking the pipeline status
 
 ```sh
 oc get pipelinerun
+```
+
+To view detailed logs:
+```sh
+tkn pipelinerun logs <pipelinerun-name>
 ```
 
 ## Clean up

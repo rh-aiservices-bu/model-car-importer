@@ -14,6 +14,24 @@ data:
     import json
     import shutil
 
+    def get_directory_size(path):
+        """Calculate total size of all files in a directory."""
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                if not os.path.islink(fp):
+                    total_size += os.path.getsize(fp)
+        return total_size
+
+    def format_size(size_bytes):
+        """Convert size in bytes to human readable format."""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.2f} PB"
+
     # Print GPU information
     print(f"Number of GPUs available: {torch.cuda.device_count()}")
     for i in range(torch.cuda.device_count()):
@@ -39,6 +57,10 @@ data:
     
     print(f"Current working directory: {os.getcwd()}")
     print(f"Model directory contents: {os.listdir(model_dir)}")
+
+    # Calculate original model size
+    original_size = get_directory_size(model_dir)
+    print(f"\nOriginal model size: {format_size(original_size)}")
 
     # Check model index file
     index_file = os.path.join(model_dir, 'model.safetensors.index.json')
@@ -146,7 +168,13 @@ data:
     # Save tokenizer
     tokenizer.save_pretrained(compressed_dir)
     
-    print("Renaming directories...")
+    # Calculate compressed model size
+    compressed_size = get_directory_size(compressed_dir)
+    print(f"\nCompressed model size: {format_size(compressed_size)}")
+    print(f"Size reduction: {format_size(original_size - compressed_size)}")
+    print(f"Compression ratio: {original_size/compressed_size:.2f}x")
+    
+    print("\nRenaming directories...")
     # First rename the original model directory
     if os.path.exists(original_dir):
         shutil.rmtree(original_dir)
