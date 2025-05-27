@@ -5,20 +5,27 @@ metadata:
 spec:
   pipelineRef:
     name: modelcar-pipeline
+  timeout: 3h  # Add a 2-hour timeout
   params:
     - name: HUGGINGFACE_MODEL
-      value: "meta-llama/Llama-3.1-8B-Instruct"  # Update with your model
-    - name: HUGGINGFACE_ALLOW_PATTERNS
-      value: '"*.safetensors", "*.json", "*.txt"'  # Optional: Change or remove to download all files
+      value: "ibm-granite/granite-3.2-2b-instruct"
     - name: OCI_IMAGE
-      value: "quay.io/hayesphilip/modelcar:latest"  # Destination OCI image
+      value: "quay.io/hayesphilip/granite-3.2-2b-instruct"
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      value: "*.safetensors *.json *.txt"
+    - name: COMPRESS_MODEL
+      value: "true"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
-        claimName: modelcar-storage  # Ensure this PVC is created before running
+        claimName: modelcar-storage
     - name: quay-auth-workspace
       secret:
         secretName: quay-auth
-        items:
-          - key: .dockerconfigjson
-            path: .dockerconfigjson
+  podTemplate:
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      nvidia.com/gpu.present: "true"

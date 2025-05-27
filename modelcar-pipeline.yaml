@@ -14,10 +14,30 @@ spec:
       type: string
       description: 'Optional array of file patterns to allow default: "*.safetensors", "*.json", "*.txt"'
       default: ""
+    - name: COMPRESS_MODEL
+      type: string
+      description: "Whether to compress the model using llmcompressor (true/false)"
+      default: "false"
   workspaces:
     - name: shared-workspace
     - name: quay-auth-workspace
   tasks:
+    - name: cleanup-workspace
+      taskSpec:
+        workspaces:
+          - name: shared-workspace
+        steps:
+          - name: cleanup
+            image: quay.io/fedora/fedora:latest
+            script: |
+              #!/bin/sh
+              set -e
+              echo "Cleaning up workspace..."
+              rm -rf /workspace/shared-workspace/*
+              echo "Workspace cleanup complete!"
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
     - name: pull-model-from-huggingface
       taskSpec:
         workspaces:
@@ -58,6 +78,19 @@ spec:
       workspaces:
         - name: shared-workspace
           workspace: shared-workspace
+      runAfter:
+        - cleanup-workspace
+    - name: compress-model
+      taskRef:
+        name: compress-model
+      params:
+        - name: COMPRESS_MODEL
+          value: $(params.COMPRESS_MODEL)
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+      runAfter:
+        - pull-model-from-huggingface
     - name: process
       taskSpec:
         steps:
@@ -67,7 +100,7 @@ spec:
               #!/usr/bin/env python3
               print("process")
       runAfter:
-        - pull-model-from-huggingface
+        - compress-model
 
     - name: build-and-push-modelcar
       taskSpec:
