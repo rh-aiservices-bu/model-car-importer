@@ -1,166 +1,141 @@
-# ModelCar Pipeline for OpenShift
+# ModelCar Pipeline
 
-This OpenShift pipeline automates:
-- Downloading a model from Hugging Face.
-- Optionally compressing the model using GPTQ quantization.
-- Storing the model in a Persistent Volume.
-- Building a ModelCar OCI image.
-- Pushing the image to an OCI registry (e.g., Quay.io).
-- Registering the model in the OpenShift model registry.
+A Tekton pipeline for downloading models from Hugging Face, optionally compressing them, and building them into OCI images.
 
-## 🚀 Prerequisites
+## Features
 
-Ensure you have:
-1. **OpenShift CLI (`oc`) installed** - [Install OpenShift CLI](https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html)
-2. **OpenShift Pipelines (Tekton) installed**
-3. **GPU-enabled nodes** - Required for model compression
+- Downloads models from Hugging Face
+- Optional model compression using GPTQ quantization
+- Builds models into OCI images
+- Pushes images to Quay.io
+- Registers models in the OpenShift model registry
 
----
+## Prerequisites
 
-## Installation
+- OpenShift cluster with Tekton installed
+- GPU-enabled nodes (for model compression)
+- Quay.io account with push access
+- Hugging Face account with access to the desired model
+- OpenShift model registry access
 
-### 1. Create the Required OpenShift Secret
+## Pipeline Parameters
 
-This example is for quay.io
-
-To push images to **Quay.io**, you need to create an **OpenShift Secret** that stores your authentication credentials. Follow these steps to generate and configure the secret:  
-
-#### Log in to Quay.io
-- Go to [Quay.io](https://quay.io/) and log in to your account.  
-
-#### Create or Select a Robot Account
-- Click on your **profile icon** in the top-right corner and select **Account Settings**.  
-- Navigate to the **Robot Accounts** section.  
-- Create a new robot account **(or select an existing one)**.  
-
-#### Assign Write Permissions  
-- Grant the **robot account** **write permissions** for the repository where you want to push images.  
-
-#### Download the Secret File  
-- Click on the **robot account** to open its details.  
-- Find the **Kubernetes Secret** option and **download the YAML file**.  
-
-#### Modify and Apply the Secret  
-- Open the downloaded YAML file in a text editor.  
-- Change the `metadata.name` field to **`quay-auth`**.  
-- Apply the secret to OpenShift using:  
-  ```sh
-  oc apply -f quay-auth-secret.yaml
-  ```
-
-#### Verify the Secret  
-To confirm the secret has been created, run:  
-```sh
-oc get secrets | grep quay-auth
-```
-
-Now, your OpenShift cluster can authenticate with **Quay.io** for secure image pushes. 🚀
-
----
-
-### 2. Apply the Tekton Pipeline in OpenShift
-Apply the pipeline YAML to your OpenShift project:
-```sh
-oc apply -f modelcar-pipeline.yaml
-```
-
-Verify the pipeline is created:
-```sh
-tkn pipeline list
-```
-
----
-
-### 3. Apply the modelcar-storage in OpenShift
-
-Apply the pipeline YAML to your OpenShift project:
-```sh
-oc apply -f modelcar-storage.yaml
-```
-
-### 4. Create a secret for your Huggingface token
-
-If the model you are downloading from huggingface requires a token, create a secret with:
-
-```
-oc create secret generic huggingface-secret \
-  --from-literal=HUGGINGFACE_TOKEN=your_actual_token_here
-```
-
----
+- `HUGGINGFACE_MODEL`: The Hugging Face model repository (e.g., "ibm-granite/granite-3.2-2b-instruct")
+- `OCI_IMAGE`: The OCI image destination (e.g., "quay.io/my-user/my-modelcar")
+- `HUGGINGFACE_ALLOW_PATTERNS`: Optional array of file patterns to allow (default: "*.safetensors", "*.json", "*.txt")
+- `COMPRESS_MODEL`: Whether to compress the model using GPTQ (true/false)
+- `MODEL_NAME`: Name of the model to register in the model registry
+- `MODEL_VERSION`: Version of the model to register (default: "1.0.0")
+- `MODEL_REGISTRY_URL`: URL of the model registry service
+- `SKIP_TASKS`: Comma-separated list of tasks to skip
 
 ## Model Compression
 
-The pipeline includes an optional model compression step using GPTQ quantization. This can significantly reduce the model size while maintaining reasonable performance.
-
-### Compression Details
-
-The compression process:
-1. Uses GPTQ (Generative Pre-trained Transformer Quantization) with W4A16 scheme
-2. Quantizes linear layers to 4-bit precision while keeping activations in 16-bit
-3. Preserves the original model in a backup directory (`model_original`)
-4. Automatically calculates and reports size reduction statistics
+The pipeline can optionally compress models using GPTQ quantization. This process:
+- Reduces model size while maintaining performance
+- Requires GPU-enabled nodes
+- Uses the `compress-model` task
 
 ### Compression Parameters
 
-The compression is configured with the following parameters:
-- Group size: 16 (for quantization granularity)
-- Calibration samples: 16 per GPU
-- Maximum sequence length: 64 (for calibration)
-- Memory per GPU: 16GB
+- `COMPRESS_MODEL`: Set to "true" to enable compression
+- `BITS`: Number of bits for quantization (default: 4)
+- `GROUP_SIZE`: Group size for quantization (default: 128)
+- `DATASET`: Dataset to use for calibration (default: "c4")
+- `SEQUENCE_LENGTH`: Maximum sequence length (default: 2048)
 
 ### Resource Requirements
 
-Compression requires:
-- NVIDIA GPUs (4 GPUs recommended)
-- 24GB memory per GPU
-- 1 CPU core per GPU
+- GPU with at least 16GB VRAM
+- 32GB RAM
+- 100GB storage
 
----
+## Model Registry Integration
 
-## Usage Instructions
+The pipeline can register models in the OpenShift model registry. This process:
+- Creates a model entry in the registry
+- Associates the model with its OCI image
+- Stores metadata about the model
 
-Edit the contents of `modelcar-pipelinerun.yaml` to specify:
-- `HUGGINGFACE_MODEL`: The model to download from Hugging Face
-- `OCI_IMAGE`: The destination OCI image
-- `HUGGINGFACE_ALLOW_PATTERNS`: File patterns to download (default: "*.safetensors *.json *.txt")
-- `COMPRESS_MODEL`: Set to "true" to enable compression
-- `MODEL_NAME`: Name of the model to register in the model registry
-- `MODEL_VERSION`: Version of the model to register (default: "1.0.0")
-- `SKIP_TASKS`: Comma-separated list of tasks to skip (e.g., "cleanup-workspace,pull-model-from-huggingface,compress-model,process,build-and-push-modelcar")
+### Registry Parameters
 
-Example configuration:
+- `MODEL_NAME`: Name of the model in the registry
+- `MODEL_VERSION`: Version of the model
+- `MODEL_REGISTRY_URL`: URL of the model registry service
+
+### Model Metadata
+
+The following metadata is stored with the model:
+- Source: "huggingface"
+- Framework: "pytorch"
+- Compression status
+- Model URI
+
+## Usage
+
+1. Create the required secrets:
+   ```bash
+   # Create Quay.io authentication secret
+   oc create secret docker-registry quay-auth \
+     --docker-server=quay.io \
+     --docker-username=<your-username> \
+     --docker-password=<your-password>
+
+   # Create Hugging Face token secret (optional)
+   oc create secret generic huggingface-secret \
+     --from-literal=HUGGINGFACE_TOKEN=<your-token>
+   ```
+
+2. Create a persistent volume claim for model storage:
+   ```bash
+   oc apply -f modelcar-storage.yaml
+   ```
+
+3. Create the pipeline:
+   ```bash
+   oc apply -f modelcar-pipeline.yaml
+   ```
+
+4. Run the pipeline:
+   ```bash
+   oc apply -f modelcar-pipelinerun.yaml
+   ```
+
+### Example Configuration
+
 ```yaml
 params:
   - name: HUGGINGFACE_MODEL
     value: "ibm-granite/granite-3.2-2b-instruct"
   - name: OCI_IMAGE
-    value: "quay.io/my-user/my-modelcar"
+    value: "quay.io/my-user/modelcar-granite-3.2-2b-instruct"
   - name: HUGGINGFACE_ALLOW_PATTERNS
-    value: "*.safetensors *.json *.txt"
+    value: "*.safetensors,*.json,*.txt"
   - name: COMPRESS_MODEL
     value: "true"
   - name: MODEL_NAME
-    value: "ibm-granite/granite-3.2-2b-instruct"
+    value: "granite-3.2-2b-instruct"
   - name: MODEL_VERSION
     value: "1.0.0"
+  - name: MODEL_REGISTRY_URL
+    value: "https://registry-rest.apps.dev.xxx.com"
   - name: SKIP_TASKS
-    value: "cleanup-workspace,pull-model-from-huggingface,compress-model,process,build-and-push-modelcar"
+    value: ""  # Run all tasks
 ```
 
-### Testing Individual Tasks
+## Monitoring
 
-You can test individual tasks by skipping the others using the `SKIP_TASKS` parameter. For example, to test only the model registration:
+- Check pipeline status:
+  ```bash
+  oc get pipelinerun modelcar-pipelinerun
+  ```
 
-```yaml
-params:
-  - name: SKIP_TASKS
-    value: "cleanup-workspace,pull-model-from-huggingface,compress-model,process,build-and-push-modelcar"
-```
+- View pipeline logs:
+  ```bash
+  oc logs -f $(oc get pods -l tekton.dev/pipelineRun=modelcar-pipelinerun -o name)
+  ```
 
-This will run only the `register-with-registry` task, skipping all other tasks.
-
-Run the pipeline with:
-```sh
-oc create -f modelcar-pipelinerun.yaml
-```
+- View model in registry:
+  ```bash
+  oc get model granite-3.2-2b-instruct
+  ```
