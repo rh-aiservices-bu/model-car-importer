@@ -4,10 +4,12 @@ A Tekton pipeline for downloading models from Hugging Face, optionally compressi
 
 ![Pipeline Diagram](assets/pipeline.png)
 
+When the pipeline is triggered, it follows a sequential workflow: First, it cleans up any existing files in the workspace. Then, it downloads the specified model from Hugging Face, including only the files matching the allowed patterns. If compression is enabled, the model is processed using the LLM Compressor from Red Hat AI Inference Server, which quantizes the model to reduce its size while maintaining performance. The model files are then packaged into an OCI image using the OLOT tool, and the image is pushed to the specified Quay.io repository. Finally, the model is registered in the OpenShift model registry, where it can be discovered and used by other applications in the cluster.
+
 ## Features
 
 - Downloads models from Hugging Face
-- Optional model compression using GPTQ quantization
+- Optional model compression using the LLM Compressor from Red Hat AI Inference Server
 - Builds models into OCI images
 - Pushes images to Quay.io
 - Registers models in the OpenShift model registry
@@ -25,7 +27,7 @@ A Tekton pipeline for downloading models from Hugging Face, optionally compressi
 - `HUGGINGFACE_MODEL`: The Hugging Face model repository (e.g., "ibm-granite/granite-3.2-2b-instruct")
 - `OCI_IMAGE`: The OCI image destination (e.g., "quay.io/my-user/my-modelcar")
 - `HUGGINGFACE_ALLOW_PATTERNS`: Optional array of file patterns to allow (default: "*.safetensors", "*.json", "*.txt")
-- `COMPRESS_MODEL`: Whether to compress the model using GPTQ (true/false)
+- `COMPRESS_MODEL`: Whether to compress the model using the LLM Compressor
 - `MODEL_NAME`: Name of the model to register in the model registry
 - `MODEL_VERSION`: Version of the model to register (default: "1.0.0")
 - `MODEL_REGISTRY_URL`: URL of the model registry service
@@ -33,7 +35,7 @@ A Tekton pipeline for downloading models from Hugging Face, optionally compressi
 
 ## Model Compression
 
-The pipeline can optionally compress models using GPTQ quantization. This process:
+The pipeline can optionally compress models using the LLM Compressor. This process:
 - Reduces model size while maintaining performance
 - Requires GPU-enabled nodes
 - Uses the `compress-model` task
