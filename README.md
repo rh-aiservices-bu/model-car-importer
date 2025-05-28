@@ -6,7 +6,7 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 
 ## Prerequisites
 
-- OpenShift AI cluster with GPU-enabled nodes
+- OpenShift AI cluster with GPU-enabled node (e.g., AWS EC2 g6.12xlarge instance providing 4 x NVIDIA L4 Tensor Core GPUs)
 - Access to Quay.io (for pushing images)
 - Access to Hugging Face (for downloading models)
 - OpenShift model registry service
@@ -225,6 +225,14 @@ oc get pipelinerun
 | `SKIP_TASKS` | Comma-separated list of tasks to skip | "" |
 | `MODEL_REGISTRY_URL` | URL of the model registry service | - |
 | `DEPLOY_MODEL` | Whether to deploy the model as an InferenceService (true/false) | "false" |
+
+### Skipping Tasks
+
+The pipeline supports skipping specific tasks using the `SKIP_TASKS` parameter. This is useful for example if you want to deploy a model without redoing the entire pipeline. For example, to skip all tasks up to the deploy stage:
+
+```bash
+SKIP_TASKS="cleanup-workspace,pull-model-from-huggingface,compress-model,build-and-push-modelcar,register-with-registry"
+```
 
 ## Model Deployment
 
