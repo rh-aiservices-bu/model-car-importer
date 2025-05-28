@@ -1,145 +1,330 @@
 # ModelCar Pipeline
 
-A Tekton pipeline for downloading models from Hugging Face, optionally compressing them, and building them into OCI images.
-
-![Pipeline Diagram](assets/pipeline.png)
-
-When the pipeline is triggered, it follows a sequential workflow: First, it cleans up any existing files in the workspace. Then, it downloads the specified model from Hugging Face, including only the files matching the allowed patterns. If compression is enabled, the model is processed using the LLM Compressor from Red Hat AI Inference Server, which quantizes the model to reduce its size while maintaining performance. The model files are then packaged into an OCI image using the OLOT tool, and the image is pushed to the specified Quay.io repository. Finally, the model is registered in the OpenShift model registry, where it can be discovered and used by other applications in the cluster.
-
-## Features
-
-- Downloads models from Hugging Face
-- Optional model compression using the LLM Compressor from Red Hat AI Inference Server
-- Builds models into OCI images
-- Pushes images to Quay.io
-- Registers models in the OpenShift model registry
+A Tekton pipeline for downloading models from Hugging Face, compressing them, packaging them into ModelCar images, and deploying them using RHAIIS in OpenShift.
 
 ## Prerequisites
 
-- OpenShift cluster with Tekton installed
-- GPU-enabled nodes (for model compression)
-- Quay.io account with push access
-- Hugging Face account with access to the desired model
-- OpenShift model registry access
+- OpenShift AI cluster with GPU-enabled nodes
+- Access to Quay.io (for pushing images)
+- Access to Hugging Face (for downloading models)
+- OpenShift model registry service
+- Service account with appropriate permissions
+- Quay.io authentication secret
+
+## Overview
+
+This pipeline automates the process of:
+1. Downloading models from Hugging Face
+2. Optionally compressing models using the RHAIIS LLM Compressor
+3. Packaging models into OCI images
+4. Pushing images to Quay.io
+5. Registering models in the OpenShift model registry
+6. Optionally deploying models as InferenceServices with GPU support
+
+## Features
+
+- Downloads models from Hugging Face with customizable file patterns
+- Optional model compression using RHAIIS LLM Compressor
+- Packages models into OCI images using OLOT
+- Pushes images to Quay.io
+- Registers models in the OpenShift model registry
+- Optional deployment as InferenceService with GPU support
+- Supports skipping specific tasks
+- Configurable resource limits and requests
+- Automatic service URL detection and availability checking
+
+## Prerequisites
+
+- OpenShift AI cluster with GPU-enabled nodes
+- Access to Quay.io (for pushing images)
+- Access to Hugging Face (for downloading models)
+- OpenShift model registry service
+- Service account with appropriate permissions
+- Quay.io authentication secret
+
+## Deployment Steps
+
+### 1. Create Required Namespace
+
+```bash
+# Create a new namespace for the pipeline
+oc new-project modelcar-pipeline
+```
+
+### 2. Create Required Secrets
+
+From the quay.io page, go to account settings, and then click on "Generate Encrypted Password", authenticate and then go to the "Kubernetes Secret" tab.
+
+![Quay.io Secret Creation](assets/quay.png)
+
+Change the name of the downloaded file to to quay-auth.yaml. Edit the file and change the metadata.name field to "quay-auth"
+
+It should look like this:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: quay-auth
+data:
+  .dockerconfigjson: xxxxxxxxxxx
+type: kubernetes.io/dockerconfigjson
+```
+
+Create the secret:
+
+```bash
+oc apply -f quay-auth.yaml
+```
+
+Login to Huggingface https://huggingface.co/settings/tokens and copy your access_token
+
+Set this as an environment variable with 
+
+```bash
+export HF_TOKEN=xxx
+```
+
+# Create Hugging Face token secret by running:
+
+```bash
+cat <<EOF | oc create -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: huggingface-secret
+type: Opaque
+data:
+  HUGGINGFACE_TOKEN: $(echo $HF_TOKEN | base64)
+EOF
+```
+
+### 3. Create Service Account and Permissions
+
+```bash
+# Create service account
+oc create serviceaccount modelcar-pipeline
+
+# Create role for model registry access
+cat <<EOF | oc create -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: model-registry-access
+rules:
+- apiGroups: ["serving.kserve.io"]
+  resources: ["inferenceservices", "servingruntimes"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+EOF
+
+# Bind role to service account
+cat <<EOF | oc create -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: model-registry-access
+subjects:
+- kind: ServiceAccount
+  name: modelcar-pipeline
+roleRef:
+  kind: Role
+  name: model-registry-access
+  apiGroup: rbac.authorization.k8s.io
+EOF
+```
+
+### 4. Update Resource Quota to ensure 4 gpus are allowed
+
+```bash
+# Create or update resource quota for GPU resources
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: modelcar-pipeline-core-resource-limits
+spec:
+  hard:
+    requests.nvidia.com/gpu: "4"
+    limits.nvidia.com/gpu: "4"
+EOF
+```
+
+### 5. Create Storage
+
+```bash
+# Create storage class for pipeline workspace
+oc create -f modelcar-storage.yaml
+```
+
+### 6. Deploy Pipeline
+
+```bash
+# Create the pipeline
+oc create -f modelcar-pipeline.yaml
+
+# Create the compress-task
+oc create -f modelcar-compress-task.yaml
+
+# Create the compress-task
+oc create -f compress-script-configmap.yaml
+
+# Create the pipeline run
+cat <<EOF | oc create -f -
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: modelcar-pipelinerun
+spec:
+  pipelineRef:
+    name: modelcar-pipeline
+  serviceAccountName: modelcar-pipeline
+  params:
+    - name: HUGGINGFACE_MODEL
+      value: "ibm-granite/granite-3.2-2b-instruct"
+    - name: OCI_IMAGE
+      value: "quay.io/my-user/my-modelcar"
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      value: "*.safetensors *.json *.txt"
+    - name: COMPRESS_MODEL
+      value: "true"
+    - name: MODEL_NAME
+      value: "granite-3.2-2b-instruct"
+    - name: MODEL_VERSION
+      value: "1.0.0"
+    - name: MODEL_REGISTRY_URL
+      value: "https://registry-rest.apps.dev.xxx.com"
+    - name: DEPLOY_MODEL
+      value: "true"
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+    - name: quay-auth-workspace
+      secret:
+        secretName: quay-auth
+EOF
+```
+
+### 7. Verify Deployment
+
+```bash
+# Check pipeline status
+oc get pipelinerun
+
+```
 
 ## Pipeline Parameters
 
-- `HUGGINGFACE_MODEL`: The Hugging Face model repository (e.g., "ibm-granite/granite-3.2-2b-instruct")
-- `OCI_IMAGE`: The OCI image destination (e.g., "quay.io/my-user/my-modelcar")
-- `HUGGINGFACE_ALLOW_PATTERNS`: Optional array of file patterns to allow (default: "*.safetensors", "*.json", "*.txt")
-- `COMPRESS_MODEL`: Whether to compress the model using the LLM Compressor
-- `MODEL_NAME`: Name of the model to register in the model registry
-- `MODEL_VERSION`: Version of the model to register (default: "1.0.0")
-- `MODEL_REGISTRY_URL`: URL of the model registry service
-- `SKIP_TASKS`: Comma-separated list of tasks to skip
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `HUGGINGFACE_MODEL` | Hugging Face model repository (e.g., "ibm-granite/granite-3.2-2b-instruct") | - |
+| `OCI_IMAGE` | OCI image destination (e.g., "quay.io/my-user/my-modelcar") | - |
+| `HUGGINGFACE_ALLOW_PATTERNS` | Space-separated list of file patterns to allow (e.g., "*.safetensors *.json *.txt") | "" |
+| `COMPRESS_MODEL` | Whether to compress the model using GPTQ (true/false) | "false" |
+| `MODEL_NAME` | Name of the model to register in the model registry | - |
+| `MODEL_VERSION` | Version of the model to register | "1.0.0" |
+| `SKIP_TASKS` | Comma-separated list of tasks to skip | "" |
+| `MODEL_REGISTRY_URL` | URL of the model registry service | - |
+| `DEPLOY_MODEL` | Whether to deploy the model as an InferenceService (true/false) | "false" |
 
-## Model Compression
+## Model Deployment
 
-The pipeline can optionally compress models using the LLM Compressor. This process:
-- Reduces model size while maintaining performance
-- Requires GPU-enabled nodes
-- Uses the `compress-model` task
+When `DEPLOY_MODEL` is set to "true", the pipeline will:
+1. Create a ServingRuntime with GPU support
+2. Deploy an InferenceService using the model
+3. Wait for the service to be ready
+4. Save the service URL to the workspace
 
-### Compression Parameters
-
-- `COMPRESS_MODEL`: Set to "true" to enable compression
-- `BITS`: Number of bits for quantization (default: 4)
-- `GROUP_SIZE`: Group size for quantization (default: 128)
-- `DATASET`: Dataset to use for calibration (default: "c4")
-- `SEQUENCE_LENGTH`: Maximum sequence length (default: 2048)
+The deployment includes:
+- GPU resource allocation
+- Memory and CPU limits
+- Automatic scaling configuration
+- Service URL detection
+- Health monitoring
 
 ### Resource Requirements
 
-- GPU with at least 16GB VRAM
-- 32GB RAM
-- 100GB storage
+The default deployment configuration includes:
+- 1 NVIDIA GPU
+- 2 CPU cores
+- 8GB memory
+- 4GB memory requests
 
-## Model Registry Integration
+These can be adjusted in the pipeline configuration if needed.
 
-The pipeline can register models in the OpenShift model registry. This process:
-- Creates a model entry in the registry
-- Associates the model with its OCI image
-- Stores metadata about the model
-
-### Registry Parameters
-
-- `MODEL_NAME`: Name of the model in the registry
-- `MODEL_VERSION`: Version of the model
-- `MODEL_REGISTRY_URL`: URL of the model registry service
-
-### Model Metadata
-
-The following metadata is stored with the model:
-- Source: "huggingface"
-- Framework: "pytorch"
-- Compression status
-- Model URI
-
-## Usage
-
-1. Create the required secrets:
-   ```bash
-   # Create Quay.io authentication secret
-   oc create secret docker-registry quay-auth \
-     --docker-server=quay.io \
-     --docker-username=<your-username> \
-     --docker-password=<your-password>
-
-   # Create Hugging Face token secret (optional)
-   oc create secret generic huggingface-secret \
-     --from-literal=HUGGINGFACE_TOKEN=<your-token>
-   ```
-
-2. Create a persistent volume claim for model storage:
-   ```bash
-   oc apply -f modelcar-storage.yaml
-   ```
-
-3. Create the pipeline:
-   ```bash
-   oc apply -f modelcar-pipeline.yaml
-   ```
-
-4. Run the pipeline:
-   ```bash
-   oc apply -f modelcar-pipelinerun.yaml
-   ```
-
-### Example Configuration
+## Example Configuration
 
 ```yaml
-params:
-  - name: HUGGINGFACE_MODEL
-    value: "ibm-granite/granite-3.2-2b-instruct"
-  - name: OCI_IMAGE
-    value: "quay.io/my-user/modelcar-granite-3.2-2b-instruct"
-  - name: HUGGINGFACE_ALLOW_PATTERNS
-    value: "*.safetensors,*.json,*.txt"
-  - name: COMPRESS_MODEL
-    value: "true"
-  - name: MODEL_NAME
-    value: "granite-3.2-2b-instruct"
-  - name: MODEL_VERSION
-    value: "1.0.0"
-  - name: MODEL_REGISTRY_URL
-    value: "https://registry-rest.apps.dev.xxx.com"
-  - name: SKIP_TASKS
-    value: ""  # Run all tasks
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: modelcar-pipelinerun
+spec:
+  pipelineRef:
+    name: modelcar-pipeline
+  params:
+    - name: HUGGINGFACE_MODEL
+      value: "ibm-granite/granite-3.2-2b-instruct"
+    - name: OCI_IMAGE
+      value: "quay.io/my-user/my-modelcar"
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      value: "*.safetensors *.json *.txt"
+    - name: COMPRESS_MODEL
+      value: "true"
+    - name: MODEL_NAME
+      value: "granite-3.2-2b-instruct"
+    - name: MODEL_VERSION
+      value: "1.0.0"
+    - name: MODEL_REGISTRY_URL
+      value: "https://registry-rest.apps.dev.xxx.com"
+    - name: DEPLOY_MODEL
+      value: "true"
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+    - name: quay-auth-workspace
+      secret:
+        secretName: quay-auth
 ```
 
 ## Monitoring
 
-- Check pipeline status:
-  ```bash
-  oc get pipelinerun modelcar-pipelinerun
-  ```
+To monitor the pipeline execution:
 
-- View pipeline logs:
-  ```bash
-  oc logs -f $(oc get pods -l tekton.dev/pipelineRun=modelcar-pipelinerun -o name)
-  ```
+```bash
+# Check pipeline status
+oc get pipelinerun modelcar-pipelinerun
 
-- View model in registry:
-  ```bash
-  oc get model granite-3.2-2b-instruct
-  ```
+# View pipeline logs
+oc logs -f pipelinerun/modelcar-pipelinerun
+
+# Check model registry
+oc get registeredmodel
+oc get modelversion
+
+# Check InferenceService status (if deployed)
+oc get inferenceservice
+oc get ksvc
+```
+
+## Notes
+
+- The pipeline uses Red Hat UBI (Universal Base Image) for all tasks
+- Model compression is optional and can be skipped
+- The pipeline supports skipping specific tasks using the `SKIP_TASKS` parameter
+- Model deployment requires GPU-enabled nodes in the cluster
+- The service URL is saved to the workspace for future reference

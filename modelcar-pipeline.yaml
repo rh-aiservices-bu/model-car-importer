@@ -32,6 +32,10 @@ spec:
     - name: MODEL_REGISTRY_URL
       type: string
       description: "URL of the model registry service"
+    - name: DEPLOY_MODEL
+      type: string
+      description: "Whether to deploy the model as an InferenceService (true/false)"
+      default: "false"
   workspaces:
     - name: shared-workspace
     - name: quay-auth-workspace
@@ -45,7 +49,7 @@ spec:
           - name: SKIP_TASKS
         steps:
           - name: cleanup
-            image: quay.io/fedora/fedora:latest
+            image: registry.access.redhat.com/ubi8/ubi-minimal:latest
             script: |
               #!/bin/sh
               set -e
@@ -139,11 +143,12 @@ spec:
         params:
           - name: OCI_REGISTRY_SOURCE
           - name: OCI_REGISTRY_DESTINATION
+          - name: MODEL_VERSION
           - name: SKIP_TASK
           - name: SKIP_TASKS
         steps:
           - name: build-modelcar
-            image: quay.io/fedora/fedora:latest
+            image: registry.access.redhat.com/ubi8/ubi:latest
             script: |
               #!/bin/sh
               set -e
@@ -152,8 +157,17 @@ spec:
                 exit 0
               fi
               echo "Installing dependencies..."
-              dnf install -y golang git make python3-pip skopeo
-              pip3 install poetry
+              dnf install -y golang git make python39 python39-pip skopeo rust cargo
+              # Remove existing links if they exist
+              rm -f /usr/bin/python3 /usr/bin/pip3
+              # Create new links
+              ln -s /usr/bin/python3.9 /usr/bin/python3
+              ln -s /usr/bin/pip3.9 /usr/bin/pip3
+              pip3 install --upgrade pip setuptools wheel
+              pip3 install setuptools-rust
+              curl -sSL https://install.python-poetry.org | python3 - --version 1.4.2
+              # Add Poetry to PATH
+              export PATH="/root/.local/bin:$PATH"
               echo "Checking if OLOT already exists..."
               if [ -d "/workspace/shared-workspace/olot" ]; then
                 echo "Removing existing OLOT directory..."
@@ -162,6 +176,8 @@ spec:
               echo "Cloning and Installing OLOT..."
               git clone https://github.com/containers/olot.git /workspace/shared-workspace/olot
               cd /workspace/shared-workspace/olot
+              # Verify Poetry is available
+              poetry --version
               make
               make install
               export PATH=$PATH:/usr/local/bin
@@ -178,16 +194,18 @@ spec:
                 echo "Adding $file to OCI image..."
                 poetry run olot $IMAGE_DIR "$file"
               done
-              echo "Pushing updated OCI image to $(params.OCI_REGISTRY_DESTINATION)..."
+              echo "Pushing updated OCI image to $(params.OCI_REGISTRY_DESTINATION):$(params.MODEL_VERSION)..."
               skopeo copy --multi-arch all \
                 --authfile /workspace/quay-auth-workspace/.dockerconfigjson \
                 oci:${IMAGE_DIR}:latest \
-                docker://$(params.OCI_REGISTRY_DESTINATION)
+                docker://$(params.OCI_REGISTRY_DESTINATION):$(params.MODEL_VERSION)
       params:
         - name: OCI_REGISTRY_SOURCE
           value: "registry.access.redhat.com/ubi9-micro@sha256:414cfa255ea10eaef4528a26d5618eb67cf487b635ee20f8f14b9317bfd6a4be"
         - name: OCI_REGISTRY_DESTINATION
           value: $(params.OCI_IMAGE)
+        - name: MODEL_VERSION
+          value: $(params.MODEL_VERSION)
         - name: SKIP_TASK
           value: "build-and-push-modelcar"
         - name: SKIP_TASKS
@@ -201,6 +219,8 @@ spec:
         - compress-model
     - name: register-with-registry
       taskSpec:
+        workspaces:
+          - name: shared-workspace
         params:
           - name: MODEL_NAME
           - name: MODEL_VERSION
@@ -283,10 +303,18 @@ spec:
                   print(f"Model URI: {oci_image}")
                   print(f"Model details available at: https://rhods-dashboard-redhat-ods-applications.{cluster_domain}/modelRegistry/modelcar-pipeline-registry/registeredModels/1/versions/{registry.get_model_version(model_name, model_version).id}/details")
 
+                  # Save model version ID for deployment task
+                  model_version_id = registry.get_model_version(model_name, model_version).id
+                  with open('/workspace/shared-workspace/model_version_id', 'w') as f:
+                      f.write(str(model_version_id))
+
               except StoreError as e:
                   print(f"Model and version already exists:")
                   model_details = registry.get_model_version(model_name, model_version)
                   print(json.dumps(model_details, indent=2))
+                  # Save model version ID even if model exists
+                  with open('/workspace/shared-workspace/model_version_id', 'w') as f:
+                      f.write(str(model_details.id))
                   sys.exit(0)
               except Exception as e:
                   print(f"Error registering model: {str(e)}")
@@ -319,5 +347,223 @@ spec:
           value: $(params.SKIP_TASKS)
         - name: MODEL_REGISTRY_URL
           value: $(params.MODEL_REGISTRY_URL)
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
       runAfter:
         - build-and-push-modelcar
+    - name: deploy-model
+      taskSpec:
+        workspaces:
+          - name: shared-workspace
+        params:
+          - name: MODEL_NAME
+          - name: MODEL_VERSION
+          - name: OCI_IMAGE
+          - name: SKIP_TASK
+          - name: SKIP_TASKS
+          - name: DEPLOY_MODEL
+        steps:
+          - name: check-deployment
+            image: quay.io/openshift/origin-cli:latest
+            script: |
+              #!/bin/sh
+              set -e
+              if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
+                echo "Skipping deploy-model task"
+                exit 0
+              fi
+              if [ "$(params.DEPLOY_MODEL)" != "true" ]; then
+                echo "Model deployment skipped (DEPLOY_MODEL=false)"
+                exit 0
+              fi
+              echo "Preparing to deploy model..."
+              # Read model version ID
+              MODEL_VERSION_ID=$(cat /workspace/shared-workspace/model_version_id)
+              if [ -z "$MODEL_VERSION_ID" ]; then
+                echo "Error: Model version ID not found"
+                exit 1
+              fi
+              # Create ServingRuntime manifest
+              cat > /workspace/shared-workspace/servingruntime.yaml << EOF
+              apiVersion: serving.kserve.io/v1alpha1
+              kind: ServingRuntime
+              metadata:
+                annotations:
+                  opendatahub.io/accelerator-name: large-gpu-card
+                  opendatahub.io/apiProtocol: REST
+                  opendatahub.io/hardware-profile-name: large-gpu-card-bna9k-serving
+                  opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
+                  opendatahub.io/template-display-name: vLLM NVIDIA GPU ServingRuntime for KServe
+                  opendatahub.io/template-name: vllm-cuda-runtime
+                  openshift.io/display-name: $(echo $(params.MODEL_NAME) | tr '/' '-' | tr '.' '-')-$(echo $(params.MODEL_VERSION) | tr '.' '-')
+                name: $(echo $(params.MODEL_NAME) | tr '/' '-' | tr '.' '-')-$(echo $(params.MODEL_VERSION) | tr '.' '-')
+                namespace: $(oc project -q)
+                labels:
+                  opendatahub.io/dashboard: 'true'
+              spec:
+                annotations:
+                  prometheus.io/path: /metrics
+                  prometheus.io/port: '8080'
+                containers:
+                  - name: kserve-container
+                    image: 'quay.io/modh/vllm@sha256:c86ff1e89c86bc9821b75d7f2bbc170b3c13e3ccf538bf543b1110f23e056316'
+                    command:
+                      - python
+                      - '-m'
+                      - vllm.entrypoints.openai.api_server
+                    args:
+                      - '--port=8080'
+                      - '--model=/mnt/models'
+                      - '--served-model-name={{.Name}}'
+                    env:
+                      - name: HF_HOME
+                        value: /tmp/hf_home
+                    ports:
+                      - containerPort: 8080
+                        protocol: TCP
+                    volumeMounts:
+                      - mountPath: /dev/shm
+                        name: shm
+                multiModel: false
+                supportedModelFormats:
+                  - autoSelect: true
+                    name: vLLM
+                volumes:
+                  - emptyDir:
+                      medium: Memory
+                      sizeLimit: 2Gi
+                    name: shm
+                serviceAccountName: modelcar-pipeline
+              EOF
+              echo "Created ServingRuntime manifest"
+              echo "Applying ServingRuntime..."
+              oc apply -f /workspace/shared-workspace/servingruntime.yaml
+              echo "ServingRuntime created"
+              # Create InferenceService manifest
+              cat > /workspace/shared-workspace/inferenceservice.yaml << EOF
+              apiVersion: serving.kserve.io/v1beta1
+              kind: InferenceService
+              metadata:
+                annotations:
+                  openshift.io/display-name: $(params.MODEL_NAME) - $(params.MODEL_VERSION)
+                  serving.knative.openshift.io/enablePassthrough: 'true'
+                  serving.kserve.io/deploymentMode: Serverless
+                  sidecar.istio.io/inject: 'true'
+                  sidecar.istio.io/rewriteAppHTTPProbers: 'true'
+                name: $(echo $(params.MODEL_NAME) | tr '/' '-' | tr '.' '-')-$(echo $(params.MODEL_VERSION) | tr '.' '-')
+                namespace: $(oc project -q)
+                finalizers:
+                  - odh.inferenceservice.finalizers
+                  - inferenceservice.finalizers
+                labels:
+                  modelregistry.opendatahub.io/model-version-id: '${MODEL_VERSION_ID}'
+                  modelregistry.opendatahub.io/name: registry
+                  opendatahub.io/dashboard: 'true'
+              spec:
+                predictor:
+                  serviceAccountName: modelcar-pipeline
+                  maxReplicas: 1
+                  minReplicas: 1
+                  model:
+                    modelFormat:
+                      name: vLLM
+                    name: ''
+                    resources:
+                      limits:
+                        cpu: '2'
+                        memory: 8Gi
+                        nvidia.com/gpu: '1'
+                      requests:
+                        cpu: '1'
+                        memory: 4Gi
+                        nvidia.com/gpu: '1'
+                    runtime: $(echo $(params.MODEL_NAME) | tr '/' '-' | tr '.' '-')-$(echo $(params.MODEL_VERSION) | tr '.' '-')
+                    storageUri: 'oci://$(params.OCI_IMAGE):$(params.MODEL_VERSION)'
+                  tolerations:
+                    - effect: NoSchedule
+                      key: nvidia.com/gpu
+                      operator: Exists
+                  imagePullSecrets:
+                    - name: quay-auth
+              EOF
+              echo "Created InferenceService manifest"
+              echo "Applying InferenceService..."
+              oc apply -f /workspace/shared-workspace/inferenceservice.yaml
+              echo "Model deployment initiated"
+      params:
+        - name: MODEL_NAME
+          value: $(params.MODEL_NAME)
+        - name: MODEL_VERSION
+          value: $(params.MODEL_VERSION)
+        - name: OCI_IMAGE
+          value: $(params.OCI_IMAGE)
+        - name: SKIP_TASK
+          value: "deploy-model"
+        - name: SKIP_TASKS
+          value: $(params.SKIP_TASKS)
+        - name: DEPLOY_MODEL
+          value: $(params.DEPLOY_MODEL)
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+      runAfter:
+        - register-with-registry
+    - name: wait-for-service
+      taskSpec:
+        workspaces:
+          - name: shared-workspace
+        params:
+          - name: MODEL_NAME
+          - name: MODEL_VERSION
+          - name: SKIP_TASK
+          - name: SKIP_TASKS
+          - name: DEPLOY_MODEL
+        steps:
+          - name: wait-for-ready
+            image: quay.io/openshift/origin-cli:latest
+            script: |
+              #!/bin/sh
+              set -e
+              if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
+                echo "Skipping wait-for-service task"
+                exit 0
+              fi
+              if [ "$(params.DEPLOY_MODEL)" != "true" ]; then
+                echo "Model deployment skipped (DEPLOY_MODEL=false)"
+                exit 0
+              fi
+              SERVICE_NAME=$(echo $(params.MODEL_NAME) | tr '/' '-' | tr '.' '-')-$(echo $(params.MODEL_VERSION) | tr '.' '-')
+              echo "Waiting for service $SERVICE_NAME to be ready..."
+              # Wait for the service to be ready
+              while true; do
+                STATUS=$(oc get inferenceservice $SERVICE_NAME -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+                if [ "$STATUS" = "True" ]; then
+                  echo "Service is ready!"
+                  break
+                fi
+                echo "Service not ready yet, waiting..."
+                sleep 10
+              done
+              # Get the external URL
+              EXTERNAL_URL=$(oc get inferenceservice $SERVICE_NAME -o jsonpath='{.status.url}')
+              echo "Service is available at: $EXTERNAL_URL"
+              # Save the URL for future reference
+              echo $EXTERNAL_URL > /workspace/shared-workspace/service_url
+              echo "Service URL saved to workspace"
+      params:
+        - name: MODEL_NAME
+          value: $(params.MODEL_NAME)
+        - name: MODEL_VERSION
+          value: $(params.MODEL_VERSION)
+        - name: SKIP_TASK
+          value: "wait-for-service"
+        - name: SKIP_TASKS
+          value: $(params.SKIP_TASKS)
+        - name: DEPLOY_MODEL
+          value: $(params.DEPLOY_MODEL)
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+      runAfter:
+        - deploy-model

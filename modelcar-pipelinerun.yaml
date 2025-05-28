@@ -12,17 +12,19 @@ spec:
     - name: OCI_IMAGE
       value: "quay.io/hayesphilip/modelcar-granite-3.2-2b-instruct"
     - name: HUGGINGFACE_ALLOW_PATTERNS
-      value: "*.safetensors,*.json,*.txt"
+      value: "*.safetensors *.json *.txt"
     - name: COMPRESS_MODEL
       value: "true"
     - name: MODEL_NAME
       value: "granite-3.2-2b-instruct"
     - name: MODEL_VERSION
-      value: "1.0.0"
-    - name: SKIP_TASKS
-      value: "cleanup-workspace,pull-model-from-huggingface,compress-model,process,build-and-push-modelcar"
+      value: "4.0.0"
     - name: MODEL_REGISTRY_URL
-      value: "https://registry-rest.apps.dev.xxx"
+      value: "https://registry-rest.xxxxx.com"
+    - name: DEPLOY_MODEL
+      value: "true"
+    - name: SKIP_TASKS
+      value: "cleanup-workspace,pull-model-from-huggingface,compress-model,build-and-push-modelcar,register-with-registry"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
