@@ -2,6 +2,8 @@
 
 A Tekton pipeline for downloading models from Hugging Face, compressing them, packaging them into ModelCar images, and deploying them using RHAIIS in OpenShift.
 
+![ModelCar Pipeline](assets/pipeline.png)
+
 ## Prerequisites
 
 - OpenShift AI cluster with GPU-enabled nodes
@@ -11,16 +13,6 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 - Service account with appropriate permissions
 - Quay.io authentication secret
 
-## Overview
-
-This pipeline automates the process of:
-1. Downloading models from Hugging Face
-2. Optionally compressing models using the RHAIIS LLM Compressor
-3. Packaging models into OCI images
-4. Pushing images to Quay.io
-5. Registering models in the OpenShift model registry
-6. Optionally deploying models as InferenceServices with GPU support
-
 ## Features
 
 - Downloads models from Hugging Face with customizable file patterns
@@ -29,9 +21,8 @@ This pipeline automates the process of:
 - Pushes images to Quay.io
 - Registers models in the OpenShift model registry
 - Optional deployment as InferenceService with GPU support
+- Waits until the model is deployed to complete pipeline
 - Supports skipping specific tasks
-- Configurable resource limits and requests
-- Automatic service URL detection and availability checking
 
 ## Prerequisites
 
