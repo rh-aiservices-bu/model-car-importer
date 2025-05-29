@@ -567,3 +567,144 @@ spec:
           workspace: shared-workspace
       runAfter:
         - deploy-model
+    - name: deploy-anything-llm
+      taskSpec:
+        workspaces:
+          - name: shared-workspace
+        params:
+          - name: MODEL_NAME
+          - name: MODEL_VERSION
+          - name: SKIP_TASK
+          - name: SKIP_TASKS
+          - name: DEPLOY_MODEL
+        steps:
+          - name: deploy-ui
+            image: quay.io/openshift/origin-cli:latest
+            script: |
+              #!/bin/sh
+              set -e
+              if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
+                echo "Skipping deploy-anything-llm task"
+                exit 0
+              fi
+              if [ "$(params.DEPLOY_MODEL)" != "true" ]; then
+                echo "Model deployment skipped (DEPLOY_MODEL=false)"
+                exit 0
+              fi
+              echo "Deploying AnythingLLM UI..."
+              # Read service URL
+              SERVICE_URL=$(cat /workspace/shared-workspace/service_url)
+              if [ -z "$SERVICE_URL" ]; then
+                echo "Error: Service URL not found"
+                exit 1
+              fi
+              echo "Using service URL: $SERVICE_URL"
+              # Create AnythingLLM deployment
+              cat > /workspace/shared-workspace/anything-llm.yaml << EOF
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: anything-llm
+                namespace: $(oc project -q)
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: anything-llm
+                template:
+                  metadata:
+                    labels:
+                      app: anything-llm
+                  spec:
+                    containers:
+                    - name: anything-llm
+                      image: quay.io/rh-aiservices-bu/anythingllm-workbench:latest
+                      ports:
+                      - containerPort: 3001
+                      env:
+                      - name: STORAGE_DIR
+                        value: "/app/server/storage"
+                      - name: LLM_PROVIDER
+                        value: "generic-openai"
+                      - name: GENERIC_OPEN_AI_BASE_PATH
+                        value: "${SERVICE_URL}/v1"
+                      - name: GENERIC_OPEN_AI_API_KEY
+                        value: ""
+                      - name: GENERIC_OPEN_AI_MODEL_PREF
+                        value: "$(echo $(params.MODEL_NAME) | tr '/' '-' | tr '.' '-')-$(echo $(params.MODEL_VERSION) | tr '.' '-')"
+                      - name: GENERIC_OPEN_AI_MODEL_TOKEN_LIMIT
+                        value: "4096"
+                      - name: MODEL_BASE_PATH
+                        value: "${SERVICE_URL}"
+                      - name: VECTOR_DB
+                        value: "lancedb"
+                      - name: EMBEDDING_ENGINE
+                        value: "native"
+                      - name: DISABLE_TELEMETRY
+                        value: "true"
+                      volumeMounts:
+                      - name: storage
+                        mountPath: /app/server/storage
+                    volumes:
+                    - name: storage
+                      emptyDir: {}
+              ---
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: anything-llm
+                namespace: $(oc project -q)
+              spec:
+                selector:
+                  app: anything-llm
+                ports:
+                - port: 80
+                  targetPort: 3001
+                type: ClusterIP
+              ---
+              apiVersion: route.openshift.io/v1
+              kind: Route
+              metadata:
+                name: anything-llm
+                namespace: $(oc project -q)
+              spec:
+                to:
+                  kind: Service
+                  name: anything-llm
+                  weight: 100
+                port:
+                  targetPort: 3001
+                tls:
+                  termination: edge
+                  insecureEdgeTerminationPolicy: Allow
+                wildcardPolicy: None
+              EOF
+              echo "Created AnythingLLM manifests"
+              echo "Applying AnythingLLM deployment..."
+              oc apply -f /workspace/shared-workspace/anything-llm.yaml
+              echo "AnythingLLM deployment initiated"
+              # Wait for deployment to be ready
+              echo "Waiting for AnythingLLM to be ready..."
+              oc rollout status deployment/anything-llm
+              # Get the route URL
+              ROUTE_URL=$(oc get route anything-llm -o jsonpath='{.spec.host}')
+              echo "AnythingLLM is available at: https://${ROUTE_URL}"
+              # Save the URL for future reference
+              echo "https://${ROUTE_URL}" > /workspace/shared-workspace/anything-llm-url
+              echo "AnythingLLM URL saved to workspace"
+      params:
+        - name: MODEL_NAME
+          value: $(params.MODEL_NAME)
+        - name: MODEL_VERSION
+          value: $(params.MODEL_VERSION)
+        - name: SKIP_TASK
+          value: "deploy-anything-llm"
+        - name: SKIP_TASKS
+          value: $(params.SKIP_TASKS)
+        - name: DEPLOY_MODEL
+          value: $(params.DEPLOY_MODEL)
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+      runAfter:
+        - wait-for-service

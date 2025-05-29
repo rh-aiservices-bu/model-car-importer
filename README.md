@@ -22,6 +22,7 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 - Registers models in the OpenShift model registry
 - Optional deployment as InferenceService with GPU support
 - Waits until the model is deployed to complete pipeline
+- Deploys AnythingLLM UI configured to use the deployed model
 - Supports skipping specific tasks
 
 ## Prerequisites
@@ -159,8 +160,8 @@ oc create -f modelcar-pipeline.yaml
 # Create the compress-task
 oc create -f modelcar-compress-task.yaml
 
-# Create the compress-task
-oc create -f compress-script-configmap.yaml
+# Create the compress-script configmap from the Python file
+oc create configmap compress-script --from-file=compress.py
 
 # Create the pipeline run
 cat <<EOF | oc create -f -
@@ -241,6 +242,7 @@ When `DEPLOY_MODEL` is set to "true", the pipeline will:
 2. Deploy an InferenceService using the model
 3. Wait for the service to be ready
 4. Save the service URL to the workspace
+5. Deploy AnythingLLM UI configured to use the deployed model
 
 The deployment includes:
 - GPU resource allocation
@@ -248,6 +250,8 @@ The deployment includes:
 - Automatic scaling configuration
 - Service URL detection
 - Health monitoring
+- AnythingLLM UI with:
+  - Generic OpenAI-compatible endpoint configuration
 
 ### Resource Requirements
 
@@ -258,6 +262,14 @@ The default deployment configuration includes:
 - 4GB memory requests
 
 These can be adjusted in the pipeline configuration if needed.
+
+### AnythingLLM Configuration
+
+The AnythingLLM UI is automatically configured with:
+- Connection to the deployed model via generic OpenAI-compatible endpoint
+
+
+The UI is accessible via a secure HTTPS route with edge termination.
 
 ## Example Configuration
 
