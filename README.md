@@ -25,14 +25,6 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 - Deploys AnythingLLM UI configured to use the deployed model
 - Supports skipping specific tasks
 
-## Prerequisites
-
-- OpenShift AI cluster with GPU-enabled nodes
-- Access to Quay.io (for pushing images)
-- Access to Hugging Face (for downloading models)
-- OpenShift model registry service
-- Service account with appropriate permissions
-- Quay.io authentication secret
 
 ## Deployment Steps
 
@@ -187,7 +179,7 @@ spec:
     - name: MODEL_VERSION
       value: "1.0.0"
     - name: MODEL_REGISTRY_URL
-      value: "https://registry-rest.apps.dev.xxx.com"
+      value: "https://registry-rest.apps.xxx.com"
     - name: DEPLOY_MODEL
       value: "true"
   workspaces:
@@ -202,6 +194,13 @@ spec:
     - name: quay-auth-workspace
       secret:
         secretName: quay-auth
+  podTemplate:
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
 EOF
 ```
 

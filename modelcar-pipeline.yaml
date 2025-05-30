@@ -148,26 +148,17 @@ spec:
           - name: SKIP_TASKS
         steps:
           - name: build-modelcar
-            image: registry.access.redhat.com/ubi8/ubi:latest
+            image: quay.io/hayesphilip/modelcar-builder:latest
+            imagePullPolicy: Always
+            securityContext:
+              runAsUser: 1001
             script: |
-              #!/bin/sh
+              #!/bin/bash
               set -e
               if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
                 echo "Skipping build-and-push-modelcar task"
                 exit 0
               fi
-              echo "Installing dependencies..."
-              dnf install -y golang git make python39 python39-pip skopeo rust cargo
-              # Remove existing links if they exist
-              rm -f /usr/bin/python3 /usr/bin/pip3
-              # Create new links
-              ln -s /usr/bin/python3.9 /usr/bin/python3
-              ln -s /usr/bin/pip3.9 /usr/bin/pip3
-              pip3 install --upgrade pip setuptools wheel
-              pip3 install setuptools-rust
-              curl -sSL https://install.python-poetry.org | python3 - --version 1.4.2
-              # Add Poetry to PATH
-              export PATH="/root/.local/bin:$PATH"
               echo "Checking if OLOT already exists..."
               if [ -d "/workspace/shared-workspace/olot" ]; then
                 echo "Removing existing OLOT directory..."
@@ -309,13 +300,23 @@ spec:
                       f.write(str(model_version_id))
 
               except StoreError as e:
-                  print(f"Model and version already exists:")
-                  model_details = registry.get_model_version(model_name, model_version)
-                  print(json.dumps(model_details, indent=2))
-                  # Save model version ID even if model exists
-                  with open('/workspace/shared-workspace/model_version_id', 'w') as f:
-                      f.write(str(model_details.id))
-                  sys.exit(0)
+                  print(f"Model version already exists: {model_name} version {model_version}")
+                  try:
+                      # Get existing model version details
+                      model_details = registry.get_model_version(model_name, model_version)
+                      print(f"Existing model details:")
+                      print(f"Model ID: {model_details.id}")
+                      print(f"Model Name: {model_details.name}")
+                      
+                      # Save model version ID for deployment task
+                      with open('/workspace/shared-workspace/model_version_id', 'w') as f:
+                          f.write(str(model_details.id))
+                      
+                      print("Task completed successfully - using existing model version")
+                      sys.exit(0)
+                  except Exception as e:
+                      print(f"Error getting existing model details: {str(e)}")
+                      sys.exit(1)
               except Exception as e:
                   print(f"Error registering model: {str(e)}")
                   sys.exit(1)

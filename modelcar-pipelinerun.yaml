@@ -1,30 +1,30 @@
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  name: modelcar-pipelinerun
+  name: modelcar-pipelinerun2
 spec:
   pipelineRef:
     name: modelcar-pipeline
   timeout: 3h  # Add a 2-hour timeout
   params:
     - name: HUGGINGFACE_MODEL
-      value: "ibm-granite/granite-3.2-2b-instruct"
+      value: "meta-llama/Llama-3.1-8B-Instruct"
     - name: OCI_IMAGE
-      value: "quay.io/hayesphilip/modelcar-granite-3.2-2b-instruct"
+      value: "quay.io/hayesphilip/modelcar-meta-llama/Llama-3.1-8B-Instruct"
     - name: HUGGINGFACE_ALLOW_PATTERNS
       value: "*.safetensors *.json *.txt"
     - name: COMPRESS_MODEL
       value: "true"
     - name: MODEL_NAME
-      value: "granite-3.2-2b-instruct"
+      value: "Llama-3.1-8B-Instruct"
     - name: MODEL_VERSION
       value: "4.0.0"
     - name: MODEL_REGISTRY_URL
-      value: "https://registry-rest.xxxxx.com"
+      value: "https://registry-rest.xxx"
     - name: DEPLOY_MODEL
       value: "true"
-    - name: SKIP_TASKS
-      value: "cleanup-workspace,pull-model-from-huggingface,compress-model,build-and-push-modelcar,register-with-registry"
+    # - name: SKIP_TASKS
+    #   value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
