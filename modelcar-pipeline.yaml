@@ -53,6 +53,7 @@ spec:
             script: |
               #!/bin/sh
               set -e
+              echo "Developed by the Red Hat AI Customer Adoption and Innovation team (CAI)"
               if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
                 echo "Skipping cleanup-workspace task"
                 exit 0
@@ -92,6 +93,7 @@ spec:
             script: |
               #!/bin/sh
               set -e
+              echo "Developed by the Red Hat AI Customer Adoption and Innovation team (CAI)"
               if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
                 echo "Skipping pull-model-from-huggingface task"
                 exit 0
@@ -156,18 +158,18 @@ spec:
             script: |
               #!/bin/bash
               set -e
+              echo "Developed by the Red Hat AI Customer Adoption and Innovation team (CAI)"
               if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
                 echo "Skipping build-and-push-modelcar task"
                 exit 0
               fi
-              echo "Checking if OLOT already exists..."
-              if [ -d "/workspace/shared-workspace/olot" ]; then
-                echo "Removing existing OLOT directory..."
-                rm -rf /workspace/shared-workspace/olot
-              fi
+              echo "Setting up temporary workspace..."
+              TEMP_DIR="/tmp/olot-workspace"
+              mkdir -p $TEMP_DIR
+              cd $TEMP_DIR
               echo "Cloning and Installing OLOT..."
-              git clone https://github.com/containers/olot.git /workspace/shared-workspace/olot
-              cd /workspace/shared-workspace/olot
+              git clone https://github.com/containers/olot.git
+              cd olot
               # Verify Poetry is available
               poetry --version
               make
@@ -232,13 +234,23 @@ spec:
               import subprocess
               import json
 
+              print("Developed by the Red Hat AI Customer Adoption and Innovation team (CAI)")
               if os.environ.get('SKIP_TASK') in os.environ.get('SKIP_TASKS', '').split(','):
                   print("Skipping register-with-registry task")
                   sys.exit(0)
 
               print("Installing model-registry package...")
-              subprocess.check_call([sys.executable, "-m", "pip", "install", "model-registry==0.2.15"])
-
+              # Create user-specific pip directory
+              pip_dir = '/tmp/pip'
+              os.makedirs(pip_dir, exist_ok=True)
+              
+              # Install package
+              subprocess.check_call([sys.executable, "-m", "pip", "install", "--target", pip_dir, "model-registry==0.2.15"])
+              
+              # Add pip directory to Python path
+              sys.path.insert(0, pip_dir)
+              
+              # Now import the module
               from model_registry import ModelRegistry
               from model_registry.types import ModelArtifact, ModelVersion, RegisteredModel
               from model_registry.exceptions import StoreError
@@ -373,6 +385,7 @@ spec:
             script: |
               #!/bin/sh
               set -e
+              echo "Developed by the Red Hat AI Customer Adoption and Innovation team (CAI)"
               if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
                 echo "Skipping deploy-model task"
                 exit 0
@@ -531,6 +544,7 @@ spec:
             script: |
               #!/bin/sh
               set -e
+              echo "Developed by the Red Hat AI Customer Adoption and Innovation team (CAI)"
               if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
                 echo "Skipping wait-for-service task"
                 exit 0
@@ -589,6 +603,7 @@ spec:
             script: |
               #!/bin/sh
               set -e
+              echo "Developed by the Red Hat AI Customer Adoption and Innovation team (CAI)"
               if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
                 echo "Skipping deploy-anything-llm task"
                 exit 0
