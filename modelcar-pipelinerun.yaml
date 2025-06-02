@@ -1,7 +1,7 @@
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  name: modelcar-pipelinerun2
+  name: modelcar-pipelinerun1
 spec:
   pipelineRef:
     name: modelcar-pipeline
@@ -10,7 +10,7 @@ spec:
     - name: HUGGINGFACE_MODEL
       value: "meta-llama/Llama-3.1-8B-Instruct"
     - name: OCI_IMAGE
-      value: "quay.io/hayesphilip/modelcar-meta-llama/Llama-3.1-8B-Instruct"
+      value: "quay.io/hayesphilip/llama-3.1-8B-Instruct"
     - name: HUGGINGFACE_ALLOW_PATTERNS
       value: "*.safetensors *.json *.txt"
     - name: COMPRESS_MODEL
@@ -18,13 +18,13 @@ spec:
     - name: MODEL_NAME
       value: "Llama-3.1-8B-Instruct"
     - name: MODEL_VERSION
-      value: "4.0.0"
+      value: "4.0.1"
     - name: MODEL_REGISTRY_URL
-      value: "https://registry-rest.xxx"
+      value: "https://registry-rest.apps.xxx.com"
     - name: DEPLOY_MODEL
       value: "true"
-    # - name: SKIP_TASKS
-    #   value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
+    - name: SKIP_TASKS
+      value: "cleanup-workspace,pull-model-from-huggingface,compress-model,build-and-push-modelcar"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:

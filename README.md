@@ -1,6 +1,6 @@
 # ModelCar Pipeline
 
-A Tekton pipeline for downloading models from Hugging Face, compressing them, packaging them into ModelCar images, and deploying them using RHAIIS in OpenShift.
+A Tekton pipeline for downloading models from Hugging Face, compressing them, packaging them into ModelCar images, and deploying them on OpenShift AI along with a deployment of Anything LLM.
 
 ![ModelCar Pipeline](assets/pipeline.png)
 
@@ -17,10 +17,10 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 
 - Downloads models from Hugging Face with customizable file patterns
 - Optional model compression using RHAIIS LLM Compressor
-- Packages models into OCI images using OLOT
+- Packages models into OCI images using [OLOT](https://github.com/containers/olot)
 - Pushes images to Quay.io
 - Registers models in the OpenShift model registry
-- Optional deployment as InferenceService with GPU support
+- Deployment as InferenceService with GPU support
 - Waits until the model is deployed to complete pipeline
 - Deploys AnythingLLM UI configured to use the deployed model
 - Supports skipping specific tasks
@@ -37,29 +37,44 @@ oc new-project modelcar-pipeline
 
 ### 2. Create Required Secrets
 
-From the quay.io page, go to account settings, and then click on "Generate Encrypted Password", authenticate and then go to the "Kubernetes Secret" tab.
+#### Create a Quay.io Robot Account
 
-![Quay.io Secret Creation](assets/quay.png)
+1. Log in to your Quay.io account
+2. Navigate to your organization or user account
+3. Go to "Robot Accounts" in the left sidebar
+4. Click "Create Robot Account"
+5. Give the robot account a name (e.g., `modelcar-robot`)
+6. Select the repository you want to push to
+7. Grant "Write" permissions to the repository
+8. Click "Create Robot Account"
+9. Save the generated username and password (you'll only see the password once)
 
-Change the name of the downloaded file to to quay-auth.yaml. Edit the file and change the metadata.name field to "quay-auth"
+#### Create the Quay.io Secret
 
-It should look like this:
+Set the robot account credentials as environment variables:
 
-```yaml
+```bash
+# Set your Quay.io robot account credentials
+export QUAY_USERNAME="ROBOT_USERNAME"
+export QUAY_PASSWORD="ROBOT_PASSWORD"
+```
+
+Create a Kubernetes secret with the robot account credentials:
+
+```bash
+# Create the secret using the robot account credentials
+cat <<EOF | oc create -f -
 apiVersion: v1
 kind: Secret
 metadata:
   name: quay-auth
-data:
-  .dockerconfigjson: xxxxxxxxxxx
 type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: $(echo -n '{"auths":{"quay.io":{"auth":"'$(echo -n "${QUAY_USERNAME}:${QUAY_PASSWORD}" | base64)'"}}}' | base64)
+EOF
 ```
 
-Create the secret:
-
-```bash
-oc apply -f quay-auth.yaml
-```
+#### Create Hugging Face Token Secret
 
 Login to Huggingface https://huggingface.co/settings/tokens and copy your access_token
 
@@ -69,7 +84,7 @@ Set this as an environment variable with
 export HF_TOKEN=xxx
 ```
 
-# Create Hugging Face token secret by running:
+Create Hugging Face token secret by running:
 
 ```bash
 cat <<EOF | oc create -f -
@@ -81,6 +96,15 @@ type: Opaque
 data:
   HUGGINGFACE_TOKEN: $(echo $HF_TOKEN | base64)
 EOF
+```
+
+# Set the Model Registry URL environment variable:
+
+```bash
+# Get the model registry URL from your OpenShift AI cluster
+
+# Create an environment variable to store the model registry url.
+export MODEL_REGISTRY_URL="https://model-registry.apps.yourcluster.com"
 ```
 
 ### 3. Create Service Account and Permissions
@@ -145,17 +169,41 @@ oc create -f modelcar-storage.yaml
 
 ### 6. Deploy Pipeline
 
+Create the pipeline
 ```bash
-# Create the pipeline
 oc create -f modelcar-pipeline.yaml
+```
 
-# Create the compress-task
+Create the compress-task
+```bash
 oc create -f modelcar-compress-task.yaml
+```
 
-# Create the compress-script configmap from the Python file
+Create the compress-script configmap from the Python file which contains the python code to run the LLM Compression.
+
+The `compress.py` script:
+- Uses the LLM Compressor library to compress the model using GPTQ quantization
+- Configures compression parameters like bits (4-bit quantization) and group size
+- Handles multi-GPU compression for faster processing
+- Saves the compressed model in the same format as the original
+- Includes progress tracking and error handling
+
+```bash
 oc create configmap compress-script --from-file=compress.py
+```
 
 # Create the pipeline run
+
+Set your Quay.io repository:
+
+```bash
+# Set your Quay.io repository (replace with your repository)
+export QUAY_REPOSITORY="quay.io/your-org/your-repo"
+```
+
+This example will pull and compress the `ibm-granite/granite-3.2-2b-instruct` model.  You can change this to use other models from huggingface you have access to.
+
+```bash
 cat <<EOF | oc create -f -
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
@@ -169,7 +217,7 @@ spec:
     - name: HUGGINGFACE_MODEL
       value: "ibm-granite/granite-3.2-2b-instruct"
     - name: OCI_IMAGE
-      value: "quay.io/my-user/my-modelcar"
+      value: "${QUAY_REPOSITORY}"
     - name: HUGGINGFACE_ALLOW_PATTERNS
       value: "*.safetensors *.json *.txt"
     - name: COMPRESS_MODEL
@@ -179,7 +227,7 @@ spec:
     - name: MODEL_VERSION
       value: "1.0.0"
     - name: MODEL_REGISTRY_URL
-      value: "https://registry-rest.apps.xxx.com"
+      value: "${MODEL_REGISTRY_URL}"
     - name: DEPLOY_MODEL
       value: "true"
   workspaces:
@@ -190,7 +238,7 @@ spec:
             - ReadWriteOnce
           resources:
             requests:
-              storage: 10Gi
+              storage: 50Gi
     - name: quay-auth-workspace
       secret:
         secretName: quay-auth
@@ -252,64 +300,14 @@ The deployment includes:
 - AnythingLLM UI with:
   - Generic OpenAI-compatible endpoint configuration
 
-### Resource Requirements
-
-The default deployment configuration includes:
-- 1 NVIDIA GPU
-- 2 CPU cores
-- 8GB memory
-- 4GB memory requests
-
-These can be adjusted in the pipeline configuration if needed.
 
 ### AnythingLLM Configuration
 
 The AnythingLLM UI is automatically configured with:
 - Connection to the deployed model via generic OpenAI-compatible endpoint
 
-
 The UI is accessible via a secure HTTPS route with edge termination.
 
-## Example Configuration
-
-```yaml
-apiVersion: tekton.dev/v1beta1
-kind: PipelineRun
-metadata:
-  name: modelcar-pipelinerun
-spec:
-  pipelineRef:
-    name: modelcar-pipeline
-  params:
-    - name: HUGGINGFACE_MODEL
-      value: "ibm-granite/granite-3.2-2b-instruct"
-    - name: OCI_IMAGE
-      value: "quay.io/my-user/my-modelcar"
-    - name: HUGGINGFACE_ALLOW_PATTERNS
-      value: "*.safetensors *.json *.txt"
-    - name: COMPRESS_MODEL
-      value: "true"
-    - name: MODEL_NAME
-      value: "granite-3.2-2b-instruct"
-    - name: MODEL_VERSION
-      value: "1.0.0"
-    - name: MODEL_REGISTRY_URL
-      value: "https://registry-rest.apps.dev.xxx.com"
-    - name: DEPLOY_MODEL
-      value: "true"
-  workspaces:
-    - name: shared-workspace
-      volumeClaimTemplate:
-        spec:
-          accessModes:
-            - ReadWriteOnce
-          resources:
-            requests:
-              storage: 10Gi
-    - name: quay-auth-workspace
-      secret:
-        secretName: quay-auth
-```
 
 ## Monitoring
 
@@ -319,22 +317,35 @@ To monitor the pipeline execution:
 # Check pipeline status
 oc get pipelinerun modelcar-pipelinerun
 
-# View pipeline logs
-oc logs -f pipelinerun/modelcar-pipelinerun
-
-# Check model registry
-oc get registeredmodel
-oc get modelversion
-
 # Check InferenceService status (if deployed)
 oc get inferenceservice
-oc get ksvc
+
 ```
 
 ## Notes
 
-- The pipeline uses Red Hat UBI (Universal Base Image) for all tasks
 - Model compression is optional and can be skipped
 - The pipeline supports skipping specific tasks using the `SKIP_TASKS` parameter
 - Model deployment requires GPU-enabled nodes in the cluster
 - The service URL is saved to the workspace for future reference
+
+## Testing the Model
+
+Once the pipeline completes successfully, you can access the AnythingLLM UI to test your model:
+
+1. Get the AnythingLLM route:
+```bash
+oc get route anything-llm -o jsonpath='{.spec.host}'
+```
+
+2. Open the URL in your browser (it will be in the format `https://anything-llm-<namespace>.<cluster-domain>`)
+
+3. In the AnythingLLM UI:
+   - The model is pre-configured to use your deployed model
+   - You can start a new chat to test the model's responses
+   - The UI provides a user-friendly interface for interacting with your model
+
+4. To verify the model is working correctly:
+   - Try sending a simple prompt like "Hello, how are you?"
+   - Check that the response is generated in a reasonable time
+   - Verify that the responses are coherent and relevant

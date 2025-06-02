@@ -27,7 +27,7 @@ spec:
         memory: "24Gi"
   steps:
     - name: compress
-      image: registry.redhat.io/rhaiis/vllm-cuda-rhel9:3.0.0
+      image: quay.io/opendatahub/llmcompressor-workbench:main
       timeout: 2h
       script: |
         #!/bin/sh
@@ -43,7 +43,7 @@ spec:
           ls -la /workspace/shared-workspace/model
           
           cd /workspace/shared-workspace/model
-          python -m pip install llmcompressor datasets transformers
+          pip install git+https://github.com/vllm-project/llm-compressor.git@kylesayrs/use-memory-compression-pathways datasets transformers
           cp /workspace/compress.py .
           python compress.py
           echo "Model compression complete!"
