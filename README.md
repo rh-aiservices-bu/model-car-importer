@@ -4,15 +4,6 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 
 ![ModelCar Pipeline](assets/pipeline.png)
 
-## Prerequisites
-
-- OpenShift AI cluster with GPU-enabled node (e.g., AWS EC2 g6.12xlarge instance providing 4 x NVIDIA L4 Tensor Core GPUs)
-- Access to Quay.io (for pushing images)
-- Access to Hugging Face (for downloading models)
-- OpenShift model registry service
-- Service account with appropriate permissions
-- Quay.io authentication secret
-
 ## Features
 
 - Downloads models from Hugging Face with customizable file patterns
@@ -26,6 +17,74 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 - Supports skipping specific tasks
 
 
+## Prerequisites
+
+- OpenShift AI cluster with GPU-enabled node (e.g., AWS EC2 g6.12xlarge instance providing 4 x NVIDIA L4 Tensor Core GPUs)
+- Access to Quay.io (for pushing images)
+- Access to Hugging Face (for downloading models)
+- OpenShift model registry service
+- OpenShift CLI (oc)
+
+## Environment Variables
+
+Create a `.env` file in the root directory with the following variables:
+
+```bash
+# Quay.io credentials
+QUAY_USERNAME="ROBOT_USERNAME"
+QUAY_PASSWORD="ROBOT_PASSWORD"
+QUAY_REPOSITORY="quay.io/your-org/your-repo"
+
+# Hugging Face token
+HF_TOKEN="your_huggingface_token"
+
+# Model Registry
+MODEL_REGISTRY_URL="https://model-registry.apps.yourcluster.com"
+
+# Model details
+MODEL_NAME="granite-3.2-2b-instruct"
+MODEL_VERSION="1.0.0"
+```
+
+You can get your Hugging Face token from [Hugging Face Settings](https://huggingface.co/settings/tokens).
+
+### Creating a Quay.io Robot Account
+
+To create a robot account in Quay.io:
+
+1. Log in to [Quay.io](https://quay.io)
+2. Navigate to your organization or user account
+3. Click on "Robot Accounts" in the left sidebar menu
+4. Click "Create Robot Account" button
+5. Enter a name for the robot account (e.g. `modelcar-pipeline`)
+6. Click "Create Robot Account"
+7. On the next screen, click "Edit Repository Permissions"
+8. Search for and select your target repository
+9. Set permissions to "Write" access
+10. Click "Update Permission"
+11. Save the robot account credentials:
+    - Username will be in format: `your-org+robot-name`
+    - Password will be shown only once - copy it immediately
+12. Use these credentials in your `.env` file:
+    ```bash
+    QUAY_USERNAME="your-org+robot-name"
+    QUAY_PASSWORD="robot-account-password" 
+    ```
+
+Note: Make sure to save the password when it's displayed as it cannot be retrieved later. If you lose the password, you'll need to regenerate credentials for the robot account.
+
+
+Before running any commands, source the environment variables:
+
+```bash
+# Source the environment variables
+source .env
+
+# Verify the variables are set
+echo "Using Quay repository: $QUAY_REPOSITORY"
+echo "Using model: $MODEL_NAME"
+```
+
 ## Deployment Steps
 
 ### 1. Create Required Namespace
@@ -35,29 +94,11 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 oc new-project modelcar-pipeline
 ```
 
+
+
 ### 2. Create Required Secrets
 
-#### Create a Quay.io Robot Account
-
-1. Log in to your Quay.io account
-2. Navigate to your organization or user account
-3. Go to "Robot Accounts" in the left sidebar
-4. Click "Create Robot Account"
-5. Give the robot account a name (e.g., `modelcar-robot`)
-6. Select the repository you want to push to
-7. Grant "Write" permissions to the repository
-8. Click "Create Robot Account"
-9. Save the generated username and password (you'll only see the password once)
-
 #### Create the Quay.io Secret
-
-Set the robot account credentials as environment variables:
-
-```bash
-# Set your Quay.io robot account credentials
-export QUAY_USERNAME="ROBOT_USERNAME"
-export QUAY_PASSWORD="ROBOT_PASSWORD"
-```
 
 Create a Kubernetes secret with the robot account credentials:
 
@@ -76,14 +117,6 @@ EOF
 
 #### Create Hugging Face Token Secret
 
-Login to Huggingface https://huggingface.co/settings/tokens and copy your access_token
-
-Set this as an environment variable with 
-
-```bash
-export HF_TOKEN=xxx
-```
-
 Create Hugging Face token secret by running:
 
 ```bash
@@ -98,90 +131,46 @@ data:
 EOF
 ```
 
-# Set the Model Registry URL environment variable:
-
-```bash
-# Get the model registry URL from your OpenShift AI cluster
-
-# Create an environment variable to store the model registry url.
-export MODEL_REGISTRY_URL="https://model-registry.apps.yourcluster.com"
-```
-
 ### 3. Create Service Account and Permissions
 
 ```bash
 # Create service account
 oc create serviceaccount modelcar-pipeline
-
-# Create role for model registry access
-cat <<EOF | oc create -f -
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: model-registry-access
-rules:
-- apiGroups: ["serving.kserve.io"]
-  resources: ["inferenceservices", "servingruntimes"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["get", "list"]
-EOF
-
-# Bind role to service account
-cat <<EOF | oc create -f -
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: model-registry-access
-subjects:
-- kind: ServiceAccount
-  name: modelcar-pipeline
-roleRef:
-  kind: Role
-  name: model-registry-access
-  apiGroup: rbac.authorization.k8s.io
-EOF
 ```
 
-### 4. Update Resource Quota to ensure 4 gpus are allowed
+### 4. Create OpenShift objects
+
+First, create a dynamic resource quota file based on the current project name:
 
 ```bash
-# Create or update resource quota for GPU resources
-cat <<EOF | oc apply -f -
+# Get the current project name
+export PROJECT_NAME=$(oc project -q)
+
+# Create the resource quota file
+cat <<EOF > openshift/resource-quota.yaml
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: modelcar-pipeline-core-resource-limits
+  name: ${PROJECT_NAME}-core-resource-limits
 spec:
   hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
     requests.nvidia.com/gpu: "4"
     limits.nvidia.com/gpu: "4"
 EOF
+
+# Create all OpenShift objects
+oc apply -f openshift/
 ```
 
-### 5. Create Storage
-
-```bash
-# Create storage class for pipeline workspace
-oc create -f modelcar-storage.yaml
-```
-
-### 6. Deploy Pipeline
-
-Create the pipeline
-```bash
-oc create -f modelcar-pipeline.yaml
-```
-
-Create the compress-task
-```bash
-oc create -f modelcar-compress-task.yaml
-```
+### 5. Create ConfigMaps
 
 Create the compress-script configmap from the Python file which contains the python code to run the LLM Compression.
 
-The `compress.py` script:
+The `tasks/compress/compress.py` script:
 - Uses the LLM Compressor library to compress the model using GPTQ quantization
 - Configures compression parameters like bits (4-bit quantization) and group size
 - Handles multi-GPU compression for faster processing
@@ -189,19 +178,20 @@ The `compress.py` script:
 - Includes progress tracking and error handling
 
 ```bash
-oc create configmap compress-script --from-file=compress.py
+oc create configmap compress-script --from-file=tasks/compress/compress.py
 ```
 
-# Create the pipeline run
-
-Set your Quay.io repository:
+Create the registration script ConfigMap:
 
 ```bash
-# Set your Quay.io repository (replace with your repository)
-export QUAY_REPOSITORY="quay.io/your-org/your-repo"
+# Create the ConfigMap from the Python script
+oc create configmap register-script --from-file=tasks/register-with-registry/register.py
 ```
 
-This example will pull and compress the `ibm-granite/granite-3.2-2b-instruct` model.  You can change this to use other models from huggingface you have access to.
+### 6. Create PipelineRun
+
+
+Create the PipelineRun using environment variables:
 
 ```bash
 cat <<EOF | oc create -f -
@@ -223,26 +213,26 @@ spec:
     - name: COMPRESS_MODEL
       value: "true"
     - name: MODEL_NAME
-      value: "granite-3.2-2b-instruct"
+      value: "${MODEL_NAME}"
     - name: MODEL_VERSION
-      value: "1.0.0"
+      value: "${MODEL_VERSION}"
     - name: MODEL_REGISTRY_URL
       value: "${MODEL_REGISTRY_URL}"
     - name: DEPLOY_MODEL
       value: "true"
+    # - name: SKIP_TASKS
+    #   value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
   workspaces:
     - name: shared-workspace
-      volumeClaimTemplate:
-        spec:
-          accessModes:
-            - ReadWriteOnce
-          resources:
-            requests:
-              storage: 50Gi
+      persistentVolumeClaim:
+        claimName: modelcar-storage
     - name: quay-auth-workspace
       secret:
         secretName: quay-auth
   podTemplate:
+    securityContext:
+      runAsUser: 1001
+      fsGroup: 1001
     tolerations:
       - key: "nvidia.com/gpu"
         operator: "Exists"
@@ -257,7 +247,6 @@ EOF
 ```bash
 # Check pipeline status
 oc get pipelinerun
-
 ```
 
 ## Pipeline Parameters
@@ -349,3 +338,40 @@ oc get route anything-llm -o jsonpath='{.spec.host}'
    - Try sending a simple prompt like "Hello, how are you?"
    - Check that the response is generated in a reasonable time
    - Verify that the responses are coherent and relevant
+
+## Cleanup
+
+To remove all objects created by the pipeline and clean up the namespace, run the following commands:
+
+```bash
+# Source environment variables if not already done
+
+PROJECT_NAME=$(oc project -q)
+
+oc delete pipelinerun modelcar-pipelinerun
+
+
+oc delete -f openshift/
+
+oc delete configmap compress-script
+oc delete configmap register-script
+
+
+oc delete secret quay-auth
+oc delete secret huggingface-secret
+
+
+oc delete serviceaccount modelcar-pipeline
+
+
+oc delete inferenceservice --all --namespace $PROJECT_NAME
+
+
+oc delete servingruntime --all  --namespace $PROJECT_NAME
+
+
+oc delete deployment anything-llm
+
+
+oc delete project $PROJECT_NAME
+```

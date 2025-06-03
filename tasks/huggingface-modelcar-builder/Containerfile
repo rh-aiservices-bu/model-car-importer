@@ -1,0 +1,25 @@
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.5 as base
+
+# Set the HF_TOKEN with --build-arg HF_TOKEN="hf_..." at build time
+USER root
+ARG HF_TOKEN
+
+COPY requirements.txt .
+
+# Install necessary Python dependencies
+RUN microdnf -y install git git-lfs python3-pip && \
+    microdnf clean all && \
+    pip3 install -r requirements.txt 
+
+RUN mkdir -p /home/1001
+
+RUN chown -R 1001:1001 /home/1001
+
+USER 1001
+
+# Set the working directory to the user 1001 home directory
+WORKDIR /home/1001
+
+COPY download_model.py .
+
+ENV HF_HOME=/home/1001/.cache/huggingface

@@ -1,0 +1,16 @@
+FROM python:3.10-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip install --upgrade pip && \
+    pip install model-registry==0.2.15
+
+# Set working directory
+WORKDIR /workspace
+
+# Set the entrypoint
+ENTRYPOINT ["/bin/bash"] 

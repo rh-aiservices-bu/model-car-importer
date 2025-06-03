@@ -1,0 +1,11 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: model-registry-access
+subjects:
+- kind: ServiceAccount
+  name: modelcar-pipeline
+roleRef:
+  kind: Role
+  name: model-registry-access
+  apiGroup: rbac.authorization.k8s.io
