@@ -71,8 +71,7 @@ To create a robot account in Quay.io:
     QUAY_PASSWORD="robot-account-password" 
     ```
 
-Note: Make sure to save the password when it's displayed as it cannot be retrieved later. If you lose the password, you'll need to regenerate credentials for the robot account.
-
+Note: Make sure to save the password when it's displayed as it cannot be retrieved later. 
 
 Before running any commands, source the environment variables:
 
@@ -93,8 +92,6 @@ echo "Using model: $MODEL_NAME"
 # Create a new namespace for the pipeline
 oc new-project modelcar-pipeline
 ```
-
-
 
 ### 2. Create Required Secrets
 
