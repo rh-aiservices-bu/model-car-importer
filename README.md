@@ -37,13 +37,14 @@ QUAY_PASSWORD="ROBOT_PASSWORD"
 QUAY_REPOSITORY="quay.io/your-org/your-repo"
 
 # Hugging Face token
+HUGGINGFACE_MODEL="meta-llama/Llama-3.3-70B-Instruct"
 HF_TOKEN="your_huggingface_token"
 
 # Model Registry
 MODEL_REGISTRY_URL="https://model-registry.apps.yourcluster.com"
 
 # Model details
-MODEL_NAME="granite-3.2-2b-instruct"
+MODEL_NAME="Llama-3.3-70B-Instruct"
 MODEL_VERSION="1.0.0"
 ```
 
@@ -188,7 +189,6 @@ oc create configmap register-script --from-file=tasks/register-with-registry/reg
 
 ### 6. Create PipelineRun
 
-
 Create the PipelineRun using environment variables:
 
 ```bash
@@ -204,7 +204,7 @@ spec:
   serviceAccountName: modelcar-pipeline
   params:
     - name: HUGGINGFACE_MODEL
-      value: "meta-llama/Llama-3.1-8B-Instruct"
+      value: "${HUGGINGFACE_MODEL}"
     - name: OCI_IMAGE
       value: "${QUAY_REPOSITORY}"
     - name: HUGGINGFACE_ALLOW_PATTERNS
@@ -387,3 +387,128 @@ oc delete deployment anything-llm
 
 oc delete project $PROJECT_NAME
 ```
+
+
+## Other scenarios:
+
+### Deploy an existing model from Quay.io without downloading or compressing:
+
+```bash
+cat <<EOF | oc create -f -
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: modelcar-deploy-only
+spec:
+  pipelineRef:
+    name: modelcar-pipeline
+  timeout: 1h
+  serviceAccountName: modelcar-pipeline
+  params:
+    - name: HUGGINGFACE_MODEL
+      value: "meta-llama/Llama-2-7b-chat-hf"  # Required but not used
+    - name: OCI_IMAGE
+      value: "quay.io/your-org/llama2-7b-chat"  # Your existing model image
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      value: "*.safetensors *.json *.txt *.md"
+    - name: COMPRESS_MODEL
+      value: "false"
+    - name: MODEL_NAME
+      value: "llama2-7b-chat"
+    - name: MODEL_VERSION
+      value: "1.0.0"
+    - name: MODEL_REGISTRY_URL
+      value: "http://model-registry-service:8000"
+    - name: DEPLOY_MODEL
+      value: "true"
+    - name: EVALUATE_MODEL
+      value: "false"
+    - name: SKIP_TASKS
+      value: "cleanup-workspace,pull-model-from-huggingface"
+  workspaces:
+    - name: shared-workspace
+      persistentVolumeClaim:
+        claimName: modelcar-storage
+    - name: quay-auth-workspace
+      secret:
+        secretName: quay-auth
+  podTemplate:
+    securityContext:
+      runAsUser: 1001
+      fsGroup: 1001
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
+EOF
+```
+
+This PipelineRun will:
+1. Skip the download, compression, and evaluation tasks
+2. Use the existing model image from Quay.io
+3. Register the model in the model registry
+4. Deploy the model as an InferenceService
+5. Deploy the AnythingLLM UI
+
+### Pull a model from Hugging Face and deploy without compression or evaluation:
+
+```bash
+cat <<EOF | oc create -f -
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: modelcar-pull-and-deploy
+spec:
+  pipelineRef:
+    name: modelcar-pipeline
+  timeout: 2h
+  serviceAccountName: modelcar-pipeline
+  params:
+    - name: HUGGINGFACE_MODEL
+      value: "meta-llama/Llama-2-7b-chat-hf"
+    - name: OCI_IMAGE
+      value: "quay.io/your-org/llama2-7b-chat"
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      value: "*.safetensors *.json *.txt *.md"
+    - name: COMPRESS_MODEL
+      value: "false"
+    - name: MODEL_NAME
+      value: "llama2-7b-chat"
+    - name: MODEL_VERSION
+      value: "1.0.0"
+    - name: MODEL_REGISTRY_URL
+      value: "http://model-registry-service:8000"
+    - name: DEPLOY_MODEL
+      value: "true"
+    - name: EVALUATE_MODEL
+      value: "false"
+  workspaces:
+    - name: shared-workspace
+      persistentVolumeClaim:
+        claimName: modelcar-storage
+    - name: quay-auth-workspace
+      secret:
+        secretName: quay-auth
+  podTemplate:
+    securityContext:
+      runAsUser: 1001
+      fsGroup: 1001
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
+EOF
+```
+
+This PipelineRun will:
+1. Download the model from Hugging Face
+2. Skip compression and evaluation
+3. Build and push the ModelCar image to Quay.io
+4. Register the model in the model registry
+5. Deploy the model as an InferenceService
+6. Deploy the AnythingLLM UI
+
