@@ -8,6 +8,7 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 
 - Downloads models from Hugging Face with customizable file patterns
 - Optional model compression using RHAIIS LLM Compressor
+- Runs evaluation using gsm8k against original and compressed model, and compares results
 - Packages models into OCI images using [OLOT](https://github.com/containers/olot)
 - Pushes images to Quay.io
 - Registers models in the OpenShift model registry
