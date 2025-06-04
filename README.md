@@ -199,6 +199,7 @@ metadata:
 spec:
   pipelineRef:
     name: modelcar-pipeline
+  timeout: 3h  # Add a 3-hour timeout
   serviceAccountName: modelcar-pipeline
   params:
     - name: HUGGINGFACE_MODEL
@@ -206,7 +207,7 @@ spec:
     - name: OCI_IMAGE
       value: "${QUAY_REPOSITORY}"
     - name: HUGGINGFACE_ALLOW_PATTERNS
-      value: "*.safetensors *.json *.txt"
+      value: "*.safetensors *.json *.txt *.md"
     - name: COMPRESS_MODEL
       value: "true"
     - name: MODEL_NAME
@@ -217,8 +218,10 @@ spec:
       value: "${MODEL_REGISTRY_URL}"
     - name: DEPLOY_MODEL
       value: "true"
-    # - name: SKIP_TASKS
-    #   value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
+    - name: EVALUATE_MODEL
+      value: "true"
+    - name: SKIP_TASKS
+      value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
@@ -254,11 +257,22 @@ oc get pipelinerun
 | `OCI_IMAGE` | OCI image destination (e.g., "quay.io/my-user/my-modelcar") | - |
 | `HUGGINGFACE_ALLOW_PATTERNS` | Space-separated list of file patterns to allow (e.g., "*.safetensors *.json *.txt") | "" |
 | `COMPRESS_MODEL` | Whether to compress the model using GPTQ (true/false) | "false" |
+| `EVALUATE_MODEL` | Whether to evaluate the model using lm-evaluation-harness (true/false) | "false" |
 | `MODEL_NAME` | Name of the model to register in the model registry | - |
 | `MODEL_VERSION` | Version of the model to register | "1.0.0" |
 | `SKIP_TASKS` | Comma-separated list of tasks to skip | "" |
 | `MODEL_REGISTRY_URL` | URL of the model registry service | - |
 | `DEPLOY_MODEL` | Whether to deploy the model as an InferenceService (true/false) | "false" |
+
+### Model Evaluation
+
+When `EVALUATE_MODEL` is set to "true", the pipeline will:
+1. Install vllm and lm-evaluation-harness
+2. Run evaluation on the GSM-8K benchmark
+3. Use 5-shot evaluation with automatic batch sizing
+4. Output evaluation metrics including exact match scores
+
+The evaluation task uses the same GPU resources as the compression task to ensure consistent performance.
 
 ### Skipping Tasks
 

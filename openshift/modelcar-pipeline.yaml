@@ -36,6 +36,10 @@ spec:
       type: string
       description: "Whether to deploy the model as an InferenceService (true/false)"
       default: "false"
+    - name: EVALUATE_MODEL
+      type: string
+      description: "Whether to evaluate the model (true/false)"
+      default: "false"
   workspaces:
     - name: shared-workspace
     - name: quay-auth-workspace
@@ -148,6 +152,22 @@ spec:
           workspace: shared-workspace
       runAfter:
         - pull-model-from-huggingface
+    - name: evaluate-model
+      taskRef:
+        name: evaluate-model
+      timeout: 2h
+      params:
+        - name: EVALUATE_MODEL
+          value: $(params.EVALUATE_MODEL)
+        - name: SKIP_TASK
+          value: "evaluate-model"
+        - name: SKIP_TASKS
+          value: $(params.SKIP_TASKS)
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+      runAfter:
+        - compress-model
     - name: build-and-push-modelcar
       taskSpec:
         workspaces:
@@ -195,7 +215,12 @@ spec:
               echo "Finding and appending model files to OCI image..."
               find $MODEL_DIR -name "*" -print0 | while IFS= read -r -d '' file; do
                 echo "Adding $file to OCI image..."
-                poetry run olot $IMAGE_DIR "$file"
+                if [[ "$file" == *"README.md" ]]; then
+                  echo "Adding modelcard from readme"
+                  poetry run olot $IMAGE_DIR "$file" --modelcard
+                else
+                  poetry run olot $IMAGE_DIR "$file"
+                fi
               done
               echo "Pushing updated OCI image to $(params.OCI_REGISTRY_DESTINATION):$(params.MODEL_VERSION)..."
               # Convert image name to lowercase
@@ -221,7 +246,7 @@ spec:
         - name: quay-auth-workspace
           workspace: quay-auth-workspace
       runAfter:
-        - compress-model
+        - evaluate-model
     - name: register-with-registry
       taskSpec:
         workspaces:

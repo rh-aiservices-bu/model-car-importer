@@ -1,0 +1,87 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: evaluate-model
+spec:
+  workspaces:
+    - name: shared-workspace
+  params:
+    - name: EVALUATE_MODEL
+      type: string
+      description: "Whether to evaluate the model (true/false)"
+      default: "false"
+    - name: SKIP_TASK
+      type: string
+      description: "Name of this task"
+    - name: SKIP_TASKS
+      type: string
+      description: "Comma-separated list of tasks to skip"
+  stepTemplate:
+    resources:
+      limits:
+        nvidia.com/gpu: 4
+        memory: "24Gi"
+        cpu: 1
+      requests:
+        nvidia.com/gpu: 4
+        cpu: 1
+        memory: "24Gi"
+  steps:
+    - name: evaluate
+      image: quay.io/opendatahub/llmcompressor-workbench:main
+      timeout: 2h
+      script: |
+        #!/bin/sh
+        set -e
+        if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
+          echo "Skipping evaluate-model task"
+          exit 0
+        fi
+        if [ "$(params.EVALUATE_MODEL)" = "true" ]; then
+          echo "Evaluating models using lm-evaluation-harness..."
+          echo "Current directory: $(pwd)"
+          
+          # Install required packages
+          pip install "vllm>=0.5.5" lm_eval==0.4.3
+          
+          # Create temporary files for results
+          ORIGINAL_RESULTS="/tmp/original_results.txt"
+          COMPRESSED_RESULTS="/tmp/compressed_results.txt"
+          
+          # Function to run evaluation
+          run_evaluation() {
+            local model_path=$1
+            local model_name=$2
+            local results_file=$3
+            echo "Evaluating $model_name at $model_path..."
+            echo "Directory contents:"
+            ls -la $model_path
+            lm_eval \
+              --model vllm \
+              --model_args pretrained=$model_path,add_bos_token=True \
+              --tasks gsm8k --num_fewshot 5 --batch_size auto > $results_file
+          }
+          
+          # Evaluate original model
+          echo "=== Evaluating Original Model ==="
+          run_evaluation "/workspace/shared-workspace/model_original" "Original Model" "$ORIGINAL_RESULTS"
+          
+          # Evaluate compressed model
+          echo "=== Evaluating Compressed Model ==="
+          run_evaluation "/workspace/shared-workspace/model" "Compressed Model" "$COMPRESSED_RESULTS"
+          
+          # Display comparison of results
+          echo "=== Evaluation Results Comparison ==="
+          echo "Original Model Results:"
+          echo "------------------------"
+          cat $ORIGINAL_RESULTS
+          echo
+          echo "Compressed Model Results:"
+          echo "------------------------"
+          cat $COMPRESSED_RESULTS
+          echo
+          echo "Model evaluation complete!"
+          
+        else
+          echo "Skipping model evaluation..."
+        fi 
