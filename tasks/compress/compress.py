@@ -101,6 +101,12 @@ print("==========================================\n\n")
 SAVE_DIR = compressed_dir
 model.save_pretrained(SAVE_DIR, save_compressed=True)
 tokenizer.save_pretrained(SAVE_DIR)
+
+# Remove original directory if it exists
+if os.path.exists(original_dir):
+    import shutil
+    shutil.rmtree(original_dir)
+
 os.rename(model_dir, original_dir)
 
 # Then rename the compressed directory to model

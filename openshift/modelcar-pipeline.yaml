@@ -97,6 +97,13 @@ spec:
             image: quay.io/hayesphilip/huggingface-modelcar-builder:latest
             securityContext:
               runAsUser: 1001
+            resources:
+              limits:
+                memory: "16Gi"
+                cpu: "2"
+              requests:
+                memory: "16Gi"
+                cpu: "2"
             env:
               - name: HUGGINGFACE_TOKEN
                 valueFrom:
@@ -123,6 +130,19 @@ spec:
               if [ -d /workspace/shared-workspace/model/.cache ]; then
                 echo "Removing cache"
                 rm -r /workspace/shared-workspace/model/.cache
+              fi
+              
+              echo "Model directory structure:"
+              echo "------------------------"
+              ls -la /workspace/shared-workspace/model 
+              echo
+              
+              if [ -f /workspace/shared-workspace/model/config.json ]; then
+                echo "Config.json contents:"
+                echo "--------------------"
+                cat /workspace/shared-workspace/model/config.json
+              else
+                echo "Warning: config.json not found in model directory"
               fi
       params:
         - name: HUGGINGFACE_MODEL
@@ -213,15 +233,21 @@ spec:
                 docker://$(params.OCI_REGISTRY_SOURCE) \
                 oci:${IMAGE_DIR}:latest
               echo "Finding and appending model files to OCI image..."
-              find $MODEL_DIR -name "*" -print0 | while IFS= read -r -d '' file; do
-                echo "Adding $file to OCI image..."
+              
+              # Build list of files for olot command
+              FILES=()
+              for file in $(find $MODEL_DIR -type f); do
                 if [[ "$file" == *"README.md" ]]; then
-                  echo "Adding modelcard from readme"
-                  poetry run olot $IMAGE_DIR "$file" --modelcard
+                  FILES+=("--modelcard" "$file")
                 else
-                  poetry run olot $IMAGE_DIR "$file"
+                  FILES+=("$file")
                 fi
               done
+              
+              # Call olot once with all files
+              echo "Adding files to OCI image..."
+              poetry run olot $IMAGE_DIR "${FILES[@]}"
+              
               echo "Pushing updated OCI image to $(params.OCI_REGISTRY_DESTINATION):$(params.MODEL_VERSION)..."
               # Convert image name to lowercase
               LOWER_IMAGE=$(echo "$(params.OCI_REGISTRY_DESTINATION)" | tr '[:upper:]' '[:lower:]')
@@ -246,7 +272,7 @@ spec:
         - name: quay-auth-workspace
           workspace: quay-auth-workspace
       runAfter:
-        - evaluate-model
+        - compress-model
     - name: register-with-registry
       taskSpec:
         workspaces:

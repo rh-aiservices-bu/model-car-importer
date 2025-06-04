@@ -8,7 +8,7 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 
 - Downloads models from Hugging Face with customizable file patterns
 - Optional model compression using RHAIIS LLM Compressor
-- Runs evaluation using gsm8k against original and compressed model, and compares results
+- Runs evaluation using gsm8k against original and compressed model, and ouputs results of original model and compressed model.
 - Packages models into OCI images using [OLOT](https://github.com/containers/olot)
 - Pushes images to Quay.io
 - Registers models in the OpenShift model registry
@@ -204,7 +204,7 @@ spec:
   serviceAccountName: modelcar-pipeline
   params:
     - name: HUGGINGFACE_MODEL
-      value: "ibm-granite/granite-3.2-2b-instruct"
+      value: "meta-llama/Llama-3.1-8B-Instruct"
     - name: OCI_IMAGE
       value: "${QUAY_REPOSITORY}"
     - name: HUGGINGFACE_ALLOW_PATTERNS
@@ -221,8 +221,8 @@ spec:
       value: "true"
     - name: EVALUATE_MODEL
       value: "true"
-    - name: SKIP_TASKS
-      value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
+    # - name: SKIP_TASKS
+    #   value: "cleanup-workspace,pull-model-from-huggingface,compress-model,evaluate-model"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
