@@ -16,20 +16,28 @@ spec:
     - name: SKIP_TASKS
       type: string
       description: "Comma-separated list of tasks to skip"
+    - name: EVALUATION_SCRIPT
+      type: string
+      description: "Name of the ConfigMap containing the evaluation script"
+      default: "evaluate-script"
   stepTemplate:
     resources:
       limits:
-        nvidia.com/gpu: 4
+        nvidia.com/gpu: 1
         memory: "24Gi"
         cpu: 1
       requests:
-        nvidia.com/gpu: 4
+        nvidia.com/gpu: 1
         cpu: 1
         memory: "24Gi"
   steps:
     - name: evaluate
       image: quay.io/opendatahub/llmcompressor-workbench:main
       timeout: 2h
+      volumeMounts:
+        - name: evaluate-script
+          mountPath: /workspace/scripts/evaluate.py
+          subPath: evaluate.py
       script: |
         #!/bin/sh
         set -e
@@ -40,48 +48,24 @@ spec:
         if [ "$(params.EVALUATE_MODEL)" = "true" ]; then
           echo "Evaluating models using lm-evaluation-harness..."
           echo "Current directory: $(pwd)"
+          export HF_ALLOW_CODE_EVAL=1
           
           # Install required packages
-          pip install "vllm>=0.5.5" lm_eval==0.4.3
+          pip install "vllm" 
+          pip install "lm-eval[hf,openai]" --upgrade
           
-          # Create temporary files for results
-          ORIGINAL_RESULTS="/tmp/original_results.txt"
-          COMPRESSED_RESULTS="/tmp/compressed_results.txt"
+          # Run the evaluation script
+          python /workspace/scripts/evaluate.py \
+            --model-dir /workspace/shared-workspace/model 
           
-          # Function to run evaluation
-          run_evaluation() {
-            local model_path=$1
-            local model_name=$2
-            local results_file=$3
-            echo "Evaluating $model_name at $model_path..."
-            echo "Directory contents:"
-            ls -la $model_path
-            lm_eval \
-              --model vllm \
-              --model_args pretrained=$model_path,add_bos_token=True \
-              --tasks gsm8k --num_fewshot 5 --batch_size auto > $results_file
-          }
-          
-          # Evaluate original model
-          echo "=== Evaluating Original Model ==="
-          run_evaluation "/workspace/shared-workspace/model_original" "Original Model" "$ORIGINAL_RESULTS"
-          
-          # Evaluate compressed model
-          echo "=== Evaluating Compressed Model ==="
-          run_evaluation "/workspace/shared-workspace/model" "Compressed Model" "$COMPRESSED_RESULTS"
-          
-          # Display comparison of results
-          echo "=== Evaluation Results Comparison ==="
-          echo "Original Model Results:"
-          echo "------------------------"
-          cat $ORIGINAL_RESULTS
-          echo
-          echo "Compressed Model Results:"
-          echo "------------------------"
-          cat $COMPRESSED_RESULTS
-          echo
           echo "Model evaluation complete!"
-          
         else
           echo "Skipping model evaluation..."
-        fi 
+        fi
+  volumes:
+    - name: evaluate-script
+      configMap:
+        name: $(params.EVALUATION_SCRIPT)
+        items:
+          - key: evaluate.py
+            path: evaluate.py 

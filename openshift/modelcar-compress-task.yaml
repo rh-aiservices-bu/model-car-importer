@@ -28,7 +28,7 @@ spec:
   steps:
     - name: compress
       image: quay.io/opendatahub/llmcompressor-workbench:main
-      timeout: 2h
+      timeout: 4h
       script: |
         #!/bin/sh
         set -e

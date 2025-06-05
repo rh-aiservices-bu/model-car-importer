@@ -40,6 +40,10 @@ spec:
       type: string
       description: "Whether to evaluate the model (true/false)"
       default: "false"
+    - name: MAX_MODEL_LEN
+      type: string
+      description: "Maximum model length for vLLM (default: 8192)"
+      default: "8192"
   workspaces:
     - name: shared-workspace
     - name: quay-auth-workspace
@@ -344,6 +348,7 @@ spec:
           - name: SKIP_TASK
           - name: SKIP_TASKS
           - name: DEPLOY_MODEL
+          - name: MAX_MODEL_LEN
         steps:
           - name: check-deployment
             image: quay.io/openshift/origin-cli:latest
@@ -398,7 +403,7 @@ spec:
                       - '--port=8080'
                       - '--model=/mnt/models'
                       - '--served-model-name={{.Name}}'
-                      - '--max-model-len=8192'
+                      - '--max-model-len=$(params.MAX_MODEL_LEN)'
                     env:
                       - name: HF_HOME
                         value: /tmp/hf_home
@@ -488,6 +493,8 @@ spec:
           value: $(params.SKIP_TASKS)
         - name: DEPLOY_MODEL
           value: $(params.DEPLOY_MODEL)
+        - name: MAX_MODEL_LEN
+          value: $(params.MAX_MODEL_LEN)
       workspaces:
         - name: shared-workspace
           workspace: shared-workspace

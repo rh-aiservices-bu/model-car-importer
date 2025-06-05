@@ -1,6 +1,6 @@
 # ModelCar Pipeline
 
-A Tekton pipeline for downloading models from Hugging Face, compressing them, packaging them into ModelCar images, and deploying them on OpenShift AI along with a deployment of Anything LLM.
+A Tekton pipeline for downloading models from Hugging Face, compressing them, running evaluation, packaging them into ModelCar images, and deploying them on OpenShift AI along with a deployment of Anything LLM.
 
 ![ModelCar Pipeline](assets/pipeline.png)
 
@@ -8,7 +8,7 @@ A Tekton pipeline for downloading models from Hugging Face, compressing them, pa
 
 - Downloads models from Hugging Face with customizable file patterns
 - Optional model compression using RHAIIS LLM Compressor
-- Runs evaluation using gsm8k against original and compressed model, and ouputs results of original model and compressed model.
+- Runs evaluation using defined eval tasks e.g. gsm8k against original and compressed model, and ouputs results of compressed model.
 - Packages models into OCI images using [OLOT](https://github.com/containers/olot)
 - Pushes images to Quay.io
 - Registers models in the OpenShift model registry
@@ -187,6 +187,30 @@ Create the registration script ConfigMap:
 oc create configmap register-script --from-file=tasks/register-with-registry/register.py
 ```
 
+Create the evaluation script ConfigMap:
+
+```bash
+# Create the ConfigMap from the evaluation script
+oc create configmap evaluate-script --from-file=evaluate.py=tasks/evaluate/evaluate-script.py
+```
+
+You can create different evaluation script ConfigMaps for different types of evaluations:
+
+```bash
+# Create a script for code evaluation
+oc create configmap code-evaluate-script --from-file=evaluate.py=tasks/evaluate/code-evaluate-script.py
+
+```
+
+Then specify which script to use in your PipelineRun:
+
+```bash
+
+    - name: EVALUATION_SCRIPT
+      value: "code-evaluate-script"  # Use the code evaluation script
+
+```
+
 ### 6. Create PipelineRun
 
 Create the PipelineRun using environment variables:
@@ -208,9 +232,9 @@ spec:
     - name: OCI_IMAGE
       value: "${QUAY_REPOSITORY}"
     - name: HUGGINGFACE_ALLOW_PATTERNS
-      value: "*.safetensors *.json *.txt *.md"
+      value: "*.safetensors *.json *.txt *.md *.model"
     - name: COMPRESS_MODEL
-      value: "true"
+      value: "false"
     - name: MODEL_NAME
       value: "${MODEL_NAME}"
     - name: MODEL_VERSION
@@ -221,8 +245,8 @@ spec:
       value: "true"
     - name: EVALUATE_MODEL
       value: "true"
-    # - name: SKIP_TASKS
-    #   value: "cleanup-workspace,pull-model-from-huggingface,compress-model,evaluate-model"
+    - name: EVALUATION_SCRIPT
+      value: "evaluate-script"  # Use the standard evaluation script
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
@@ -264,14 +288,14 @@ oc get pipelinerun
 | `SKIP_TASKS` | Comma-separated list of tasks to skip | "" |
 | `MODEL_REGISTRY_URL` | URL of the model registry service | - |
 | `DEPLOY_MODEL` | Whether to deploy the model as an InferenceService (true/false) | "false" |
+| `EVALUATION_SCRIPT` | Name of the ConfigMap containing the evaluation script | "evaluate-script" |
 
 ### Model Evaluation
 
 When `EVALUATE_MODEL` is set to "true", the pipeline will:
 1. Install vllm and lm-evaluation-harness
-2. Run evaluation on the GSM-8K benchmark
-3. Use 5-shot evaluation with automatic batch sizing
-4. Output evaluation metrics including exact match scores
+2. Run evaluation using benchmarks defined in the evaluate-script.oy
+4. Output evaluation metrics
 
 The evaluation task uses the same GPU resources as the compression task to ensure consistent performance.
 
@@ -367,6 +391,7 @@ oc delete -f openshift/
 
 oc delete configmap compress-script
 oc delete configmap register-script
+oc delete configmap evaluate-script
 
 
 oc delete secret quay-auth
@@ -406,25 +431,25 @@ spec:
   serviceAccountName: modelcar-pipeline
   params:
     - name: HUGGINGFACE_MODEL
-      value: "meta-llama/Llama-2-7b-chat-hf"  # Required but not used
+      value: "${HUGGINGFACE_MODEL}"
     - name: OCI_IMAGE
-      value: "quay.io/your-org/llama2-7b-chat"  # Your existing model image
+      value: "${QUAY_REPOSITORY}"
     - name: HUGGINGFACE_ALLOW_PATTERNS
-      value: "*.safetensors *.json *.txt *.md"
+      value: "*.safetensors *.json *.txt *.md *.model"
     - name: COMPRESS_MODEL
       value: "false"
     - name: MODEL_NAME
-      value: "llama2-7b-chat"
+      value: "${MODEL_NAME}"
     - name: MODEL_VERSION
-      value: "1.0.0"
+      value: "${MODEL_VERSION}"
     - name: MODEL_REGISTRY_URL
-      value: "http://model-registry-service:8000"
+      value: "${MODEL_REGISTRY_URL}"
     - name: DEPLOY_MODEL
       value: "true"
     - name: EVALUATE_MODEL
       value: "false"
     - name: SKIP_TASKS
-      value: "cleanup-workspace,pull-model-from-huggingface"
+      value: "cleanup-workspace,pull-model-from-huggingface,build-and-push-modelcar,register-with-registry"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
@@ -467,19 +492,19 @@ spec:
   serviceAccountName: modelcar-pipeline
   params:
     - name: HUGGINGFACE_MODEL
-      value: "meta-llama/Llama-2-7b-chat-hf"
+      value: "${HUGGINGFACE_MODEL}"
     - name: OCI_IMAGE
-      value: "quay.io/your-org/llama2-7b-chat"
+      value: "${QUAY_REPOSITORY}"
     - name: HUGGINGFACE_ALLOW_PATTERNS
-      value: "*.safetensors *.json *.txt *.md"
+      value: "*.safetensors *.json *.txt *.md *.model"
     - name: COMPRESS_MODEL
       value: "false"
     - name: MODEL_NAME
-      value: "llama2-7b-chat"
+      value: "${MODEL_NAME}"
     - name: MODEL_VERSION
-      value: "1.0.0"
+      value: "${MODEL_VERSION}"
     - name: MODEL_REGISTRY_URL
-      value: "http://model-registry-service:8000"
+      value: "${MODEL_REGISTRY_URL}"
     - name: DEPLOY_MODEL
       value: "true"
     - name: EVALUATE_MODEL
@@ -512,3 +537,71 @@ This PipelineRun will:
 5. Deploy the model as an InferenceService
 6. Deploy the AnythingLLM UI
 
+### Code based evals
+
+Ensure the code-evaluate-script configmap is created.
+```bash
+oc create configmap code-evaluate-script --from-file=evaluate.py=tasks/evaluate/code-evaluate-script.py
+```
+
+```bash
+cat <<EOF | oc create -f -
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: modelcar-coding
+spec:
+  pipelineRef:
+    name: modelcar-pipeline
+  timeout: 6h
+  serviceAccountName: modelcar-pipeline
+  params:
+    - name: HUGGINGFACE_MODEL
+      value: "${HUGGINGFACE_MODEL}"
+    - name: OCI_IMAGE
+      value: "${QUAY_REPOSITORY}"
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      value: "*.safetensors *.json *.txt *.md *.model"
+    - name: COMPRESS_MODEL
+      value: "true"
+    - name: MODEL_NAME
+      value: "${MODEL_NAME}"
+    - name: MODEL_VERSION
+      value: "${MODEL_VERSION}"
+    - name: MODEL_REGISTRY_URL
+      value: "${MODEL_REGISTRY_URL}"
+    - name: DEPLOY_MODEL
+      value: "true"
+    - name: EVALUATE_MODEL
+      value: "true"
+    - name: MAX_MODEL_LEN
+      value: "16000"
+    - name: EVALUATION_SCRIPT
+      value: "code-evaluate-script"  # Use the code evaluation script
+  workspaces:
+    - name: shared-workspace
+      persistentVolumeClaim:
+        claimName: modelcar-storage
+    - name: quay-auth-workspace
+      secret:
+        secretName: quay-auth
+  podTemplate:
+    securityContext:
+      runAsUser: 1001
+      fsGroup: 1001
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
+EOF
+```
+
+This PipelineRun will:
+1. Download the model from Hugging Face
+2. Skip compression and evaluation
+3. Build and push the ModelCar image to Quay.io
+4. Register the model in the model registry
+5. Deploy the model as an InferenceService
+6. Deploy the AnythingLLM UI
