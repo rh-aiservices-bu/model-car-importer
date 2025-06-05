@@ -276,7 +276,7 @@ spec:
         - name: quay-auth-workspace
           workspace: quay-auth-workspace
       runAfter:
-        - compress-model
+        - evaluate-model
     - name: register-with-registry
       taskSpec:
         workspaces:

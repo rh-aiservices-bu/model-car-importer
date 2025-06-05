@@ -19,10 +19,11 @@ def find_latest_results(output_dir):
 def main():
     parser = argparse.ArgumentParser(description='Evaluate a model using lm-evaluation-harness')
     parser.add_argument('--model-dir', required=True, help='Path to the model directory')
+    parser.add_argument('--tasks', help='Comma-separated list of tasks to run (optional)')
     args = parser.parse_args()
 
-    # Convert comma-separated tasks to list
-    task_list = "gsm8k,hellaswag,math,mmlu"
+    # Use default tasks if not specified
+    task_list =  ["gsm8k", "hellaswag", "math", "mmlu"]
 
     print(f"Evaluating model at {args.model_dir}")
     print(f"Running tasks: {task_list}")

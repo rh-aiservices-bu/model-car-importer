@@ -22,7 +22,7 @@ def main():
     args = parser.parse_args()
 
     # Convert comma-separated tasks to list
-    task_list = "humaneval,mbpp"
+    task_list = ["humaneval","mbpp"]
 
     print(f"Evaluating model at {args.model_dir}")
     print(f"Running tasks: {task_list}")
