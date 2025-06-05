@@ -234,7 +234,7 @@ spec:
     - name: HUGGINGFACE_ALLOW_PATTERNS
       value: "*.safetensors *.json *.txt *.md *.model"
     - name: COMPRESS_MODEL
-      value: "false"
+      value: "true"
     - name: MODEL_NAME
       value: "${MODEL_NAME}"
     - name: MODEL_VERSION
