@@ -23,7 +23,7 @@ def main():
     args = parser.parse_args()
 
     # Use default tasks if not specified
-    task_list =  ["gsm8k", "hellaswag", "math", "mmlu"]
+    task_list =  ["gsm8k", "hellaswag", "mmlu"]
 
     print(f"Evaluating model at {args.model_dir}")
     print(f"Running tasks: {task_list}")
