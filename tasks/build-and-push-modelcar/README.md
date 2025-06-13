@@ -11,7 +11,7 @@ To build the container image using Podman:
 cd tasks/build-and-push-modelcar
 
 # Build the container image
-podman build -t quay.io/hayesphilip/modelcar-builder:latest -f Containerfile .
+podman build --platform linux/amd64  -t quay.io/hayesphilip/modelcar-builder:latest -f Containerfile .
 ```
 
 ## Pushing to Quay.io
