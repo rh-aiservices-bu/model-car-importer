@@ -29,6 +29,13 @@ spec:
     - name: compress
       image: quay.io/opendatahub/llmcompressor-workbench:main
       timeout: 4h
+      env:
+        - name: HUGGINGFACE_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: huggingface-secret
+              key: HUGGINGFACE_TOKEN
+              optional: true
       script: |
         #!/bin/sh
         set -e
@@ -43,7 +50,7 @@ spec:
           ls -la /workspace/shared-workspace/model
           
           cd /workspace/shared-workspace/model
-          pip install git+https://github.com/vllm-project/llm-compressor.git@kylesayrs/use-memory-compression-pathways datasets transformers
+          pip install git+https://github.com/vllm-project/llm-compressor.git datasets transformers
           cp /workspace/compress.py .
           python compress.py
           echo "Model compression complete!"

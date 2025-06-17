@@ -576,8 +576,8 @@ spec:
       value: "true"
     - name: MAX_MODEL_LEN
       value: "16000"
-    - name: EVALUATION_SCRIPT
-      value: "code-evaluate-script"  # Use the code evaluation script
+    - name: SKIP_TASKS
+      value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
