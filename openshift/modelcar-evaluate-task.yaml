@@ -20,12 +20,12 @@ spec:
     resources:
       limits:
         nvidia.com/gpu: 4
-        memory: "24Gi"
+        memory: "64Gi"
         cpu: 1
       requests:
         nvidia.com/gpu: 4
         cpu: 1
-        memory: "24Gi"
+        memory: "48Gi"
   steps:
     - name: evaluate
       image: quay.io/opendatahub/llmcompressor-workbench:main

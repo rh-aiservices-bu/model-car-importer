@@ -541,7 +541,7 @@ This PipelineRun will:
 
 Ensure the code-evaluate-script configmap is created.
 ```bash
-oc create configmap code-evaluate-script --from-file=evaluate.py=tasks/evaluate/code-evaluate-script.py
+oc create configmap compress-script --from-file=compress.py=tasks/compress/compress-code.py
 ```
 
 ```bash
@@ -549,7 +549,7 @@ cat <<EOF | oc create -f -
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  name: modelcar-coding
+  name: modelcar-coding-python-aggressive
 spec:
   pipelineRef:
     name: modelcar-pipeline
@@ -577,7 +577,7 @@ spec:
     - name: MAX_MODEL_LEN
       value: "16000"
     - name: SKIP_TASKS
-      value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
+      value: "cleanup-workspace,pull-model-from-huggingface"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
@@ -597,11 +597,3 @@ spec:
       nvidia.com/gpu.present: "true"
 EOF
 ```
-
-This PipelineRun will:
-1. Download the model from Hugging Face
-2. Skip compression and evaluation
-3. Build and push the ModelCar image to Quay.io
-4. Register the model in the model registry
-5. Deploy the model as an InferenceService
-6. Deploy the AnythingLLM UI

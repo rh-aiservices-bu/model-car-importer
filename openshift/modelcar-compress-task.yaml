@@ -19,12 +19,12 @@ spec:
     resources:
       limits:
         nvidia.com/gpu: 4
-        memory: "24Gi"
+        memory: "128Gi"
         cpu: 1
       requests:
         nvidia.com/gpu: 4
         cpu: 1
-        memory: "24Gi"
+        memory: "64Gi"
   steps:
     - name: compress
       image: quay.io/opendatahub/llmcompressor-workbench:main
@@ -36,6 +36,10 @@ spec:
               name: huggingface-secret
               key: HUGGINGFACE_TOKEN
               optional: true
+        - name: PYTORCH_CUDA_ALLOC_CONF
+          value: "max_split_size_mb:512"
+        - name: CUDA_LAUNCH_BLOCKING
+          value: "1"
       script: |
         #!/bin/sh
         set -e
@@ -50,7 +54,9 @@ spec:
           ls -la /workspace/shared-workspace/model
           
           cd /workspace/shared-workspace/model
-          pip install git+https://github.com/vllm-project/llm-compressor.git datasets transformers
+          # Fix version conflicts by installing compatible versions
+          pip install "compressed-tensors==0.9.3" datasets transformers
+          pip install git+https://github.com/vllm-project/llm-compressor.git
           cp /workspace/compress.py .
           python compress.py
           echo "Model compression complete!"

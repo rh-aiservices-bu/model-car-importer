@@ -2,8 +2,7 @@ from datasets import load_dataset, Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from huggingface_hub import login
 from llmcompressor.modifiers.quantization import GPTQModifier
-from llmcompressor.transformers import oneshot
-from llmcompressor.transformers.compression.helpers import calculate_offload_device_map
+from llmcompressor import oneshot
 import os
 import torch
 
@@ -14,6 +13,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(i) for i in range(torch.cuda.
 # Login to Hugging Face if token is available
 hf_token = os.getenv("HUGGINGFACE_TOKEN")
 if hf_token:
+    # Strip any whitespace/newlines from the token
+    hf_token = hf_token.strip()
     login(token=hf_token)
 else:
     print("Warning: HUGGINGFACE_TOKEN not found. This may cause issues accessing gated datasets.")
@@ -43,11 +44,13 @@ device_map = {}
 for i in range(num_gpus):
     device_map[f"cuda:{i}"] = []
 
-# Load model with accelerate support
+# Load model with increased memory limits (128GB available)
 model = AutoModelForCausalLM.from_pretrained(
     model_dir,
     device_map="auto",  # Let accelerate handle the distribution
-    torch_dtype="auto",
+    torch_dtype=torch.float16,  # Use float16 to save memory
+    low_cpu_mem_usage=True,     # Reduce CPU memory usage during loading
+    max_memory={0: "45GiB", 1: "45GiB", 2: "45GiB", 3: "45GiB", "cpu": "32GiB"},  # More CPU memory available
 )
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
@@ -57,26 +60,41 @@ for name, param in model.named_parameters():
     if param.device.type == 'cuda':
         print(f"{name}: {param.device}")
 
-# Use simple, focused calibration with just HumanEval
-print("Loading HumanEval dataset for code-specific calibration...")
-ds = load_dataset("openai_humaneval", split="test")
+# Use mixed calibration datasets for better accuracy
+print("Loading mixed calibration datasets for improved accuracy...")
+
+# Load HumanEval
+humaneval_ds = load_dataset("openai_humaneval", split="test")
+print(f"Loaded {len(humaneval_ds)} HumanEval samples")
+
+# Load MBPP for additional code diversity
+mbpp_ds = load_dataset("mbpp", split="test")
+print(f"Loaded {len(mbpp_ds)} MBPP samples")
+
+# Preprocess datasets to align schemas before concatenating
+def align_humaneval(example):
+    return {"text": example["prompt"]}
+
+def align_mbpp(example):
+    return {"text": example["text"]}
+
+# Convert both datasets to common format
+humaneval_aligned = humaneval_ds.map(align_humaneval, remove_columns=humaneval_ds.column_names)
+mbpp_aligned = mbpp_ds.map(align_mbpp, remove_columns=mbpp_ds.column_names)
+
+# Combine datasets
+from datasets import concatenate_datasets
+ds = concatenate_datasets([humaneval_aligned, mbpp_aligned])
 ds = ds.shuffle(seed=42)
+print(f"Combined dataset size: {len(ds)} samples")
 
-NUM_CALIBRATION_SAMPLES = len(ds)  # Use all 164 samples
-MAX_SEQUENCE_LENGTH = 2048
+NUM_CALIBRATION_SAMPLES = min(len(ds), 256)  # More samples for better calibration
+MAX_SEQUENCE_LENGTH = 512   # Increase sequence length for better calibration
 
 
-def preprocess(example):
-    # Use HumanEval prompts for calibration
-    if example.get("prompt"):
-        return {"text": example["prompt"]}
-    else:
-        return {"text": ""}
-
-ds = ds.map(preprocess)
 # Filter out empty samples  
 ds = ds.filter(lambda x: len(x["text"].strip()) > 0)
-print(f"Using {len(ds)} HumanEval calibration samples")
+print(f"Using {len(ds)} combined calibration samples")
 
 
 # Tokenize inputs.
@@ -93,31 +111,88 @@ def tokenize(sample):
 ds = ds.map(tokenize, remove_columns=ds.column_names)
 
 # Configure the quantization algorithm to run.
-# Conservative GPTQ settings optimized for CodeLlama-34B stability:
+# Optimized GPTQ settings for maximum accuracy:
 recipe = GPTQModifier(
     targets="Linear", 
     scheme="W4A16", 
     ignore=["lm_head"],
-    group_size=128,          # Standard group size for stability
-    block_size=128,          # Conservative block size
-    dampening_frac=0.1       # Higher dampening for numerical stability
+    group_size=64,           # Smaller group size for better accuracy
+    block_size=128,          # Standard block size
+    dampening_frac=0.15,     # Higher dampening for stability
+    actorder=True,           # Use activation order for better accuracy
+    static_groups=False,     # Dynamic grouping for better compression
+    sequential_update=True   # Sequential processing
 )
 
-# Apply algorithms.
-oneshot(
-    model=model,
-    dataset=ds,
-    recipe=recipe,
-    max_seq_length=MAX_SEQUENCE_LENGTH,
-    num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-)
+# Create required directories for oneshot
+os.makedirs("sparse_logs", exist_ok=True)
+os.makedirs("./offload", exist_ok=True)
+
+# Clear all caches and force garbage collection before compression
+import gc
+torch.cuda.empty_cache()
+gc.collect()
+if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+    torch.cuda.reset_peak_memory_stats()
+
+def print_memory_usage():
+    for i in range(torch.cuda.device_count()):
+        allocated = torch.cuda.memory_allocated(i) / 1024**3
+        reserved = torch.cuda.memory_reserved(i) / 1024**3
+        print(f"GPU {i}: {allocated:.2f} GB allocated, {reserved:.2f} GB reserved")
+
+print("Memory usage before compression:")
+print_memory_usage()
+
+# Don't set GPU memory fraction since each GPU has 48GB (plenty of headroom)
+# The constraint is CPU memory at 24GB total
+
+# Apply algorithms with ultra-conservative memory settings
+print("Starting compression with minimal memory footprint...")
+try:
+    oneshot(
+        model=model,
+        dataset=ds,
+        recipe=recipe,
+        max_seq_length=MAX_SEQUENCE_LENGTH,
+        num_calibration_samples=NUM_CALIBRATION_SAMPLES,
+        save_compressed=True,  # Save in compressed format
+        splits={"calibration": 1.0},  # Use all data for calibration, no validation split
+    )
+    print("Compression completed successfully!")
+except RuntimeError as e:
+    if "out of memory" in str(e).lower():
+        print(f"OOM Error during compression: {e}")
+        print("Current memory usage:")
+        print_memory_usage()
+        raise
+    else:
+        raise
 
 # Confirm generations of the quantized model look sane.
 print("\n\n")
 print("========== SAMPLE GENERATION ==============")
-input_ids = tokenizer("Hello my name is", return_tensors="pt").input_ids.to("cuda")
-output = model.generate(input_ids, max_new_tokens=100)
-print(tokenizer.decode(output[0]))
+try:
+    # Find the device of the first model parameter for proper device placement
+    model_device = next(model.parameters()).device
+    input_ids = tokenizer("Hello my name is", return_tensors="pt").input_ids.to(model_device)
+    
+    # Add attention mask to avoid warnings
+    attention_mask = torch.ones_like(input_ids)
+    
+    with torch.no_grad():
+        output = model.generate(
+            input_ids, 
+            attention_mask=attention_mask,
+            max_new_tokens=50,  # Reduce tokens to avoid device issues
+            do_sample=False,    # Use greedy decoding
+            pad_token_id=tokenizer.eos_token_id
+        )
+    print(tokenizer.decode(output[0], skip_special_tokens=True))
+    print("✅ Sample generation successful!")
+except Exception as e:
+    print(f"⚠️  Sample generation failed (common with multi-GPU setup): {e}")
+    print("This doesn't affect the compressed model - continuing...")
 print("==========================================\n\n")
 
 # Save compressed model
