@@ -16,38 +16,27 @@ spec:
     - name: SKIP_TASKS
       type: string
       description: "Comma-separated list of tasks to skip"
+    - name: MODEL_NAME
+      type: string
+      description: "Model name for the deployed service"
+    - name: MODEL_VERSION
+      type: string
+      description: "Model version for the deployed service"
   stepTemplate:
     resources:
       limits:
-        nvidia.com/gpu: 4
-        memory: "64Gi"
-        cpu: 1
+        memory: "32Gi"
+        cpu: 4
+        nvidia.com/gpu: 1
       requests:
-        nvidia.com/gpu: 4
-        cpu: 1
-        memory: "48Gi"
+        cpu: 2
+        memory: "16Gi"
+        nvidia.com/gpu: 1
   steps:
     - name: evaluate
       image: quay.io/opendatahub/llmcompressor-workbench:main
       timeout: 2h
       env:
-        # NCCL environment variables for multi-GPU container compatibility
-        - name: NCCL_IB_DISABLE
-          value: "1"
-        - name: NCCL_P2P_DISABLE
-          value: "1"
-        - name: NCCL_SHM_DISABLE
-          value: "1"
-        - name: NCCL_NET_GDR_DISABLE
-          value: "1"
-        - name: NCCL_SOCKET_IFNAME
-          value: "lo"
-        - name: NCCL_DEBUG
-          value: "INFO"
-        - name: NCCL_TIMEOUT
-          value: "3600"
-        - name: NCCL_BUFFSIZE
-          value: "1048576"
         - name: HF_ALLOW_CODE_EVAL
           value: "1"
       volumeMounts:
@@ -62,19 +51,45 @@ spec:
           exit 0
         fi
         if [ "$(params.EVALUATE_MODEL)" = "true" ]; then
-          echo "Evaluating models using lm-evaluation-harness..."
+          echo "🚀 Evaluating model using local vLLM with lm-evaluation-harness..."
           echo "Current directory: $(pwd)"
           
           # Install required packages
-          pip install "vllm" 
-          pip install "lm-eval[hf,openai]" --upgrade
-          pip install "requests"
+          pip install "lm-eval[vllm]" --upgrade
           
-          # Run the comparison evaluation script
-          python /workspace/scripts/evaluate.py \
-            --model-dir /workspace/shared-workspace/model 
+          # Check for local model directory
+          if [ -d "/workspace/shared-workspace/model" ]; then
+            LOCAL_MODEL_DIR="/workspace/shared-workspace/model"
+            echo "📁 Using compressed model directory: $LOCAL_MODEL_DIR"
+          elif [ -d "/workspace/shared-workspace/model_original" ]; then
+            LOCAL_MODEL_DIR="/workspace/shared-workspace/model_original"
+            echo "📁 Using original model directory: $LOCAL_MODEL_DIR"
+          else
+            echo "❌ No local model directory found in workspace"
+            echo "Workspace contents:"
+            ls -la /workspace/shared-workspace/
+            exit 1
+          fi
           
-          echo "Model evaluation complete!"
+          echo "🔧 Running lm_eval with local vLLM..."
+          echo "  Model Directory: $LOCAL_MODEL_DIR"
+          
+          # Set environment variables
+          export TOKENIZERS_PARALLELISM=false
+          export HF_HOME=/tmp/hf_cache
+          
+          # Run lm_eval with local vLLM
+          lm_eval --model vllm \
+            --model_args "pretrained=$LOCAL_MODEL_DIR,tensor_parallel_size=1,gpu_memory_utilization=0.8,max_model_len=16000" \
+            --tasks humaneval,mbpp \
+            --num_fewshot 3 \
+            --batch_size 1 \
+            --output_path /workspace/shared-workspace/evaluation_results \
+            --log_samples \
+            --confirm_run_unsafe_code
+          
+          echo "✅ Model evaluation complete!"
+          echo "📋 Results saved to: /workspace/shared-workspace/evaluation_results"
         else
           echo "Skipping model evaluation..."
         fi

@@ -1,22 +1,46 @@
 # ModelCar Pipeline
 
-A Tekton pipeline for downloading models from Hugging Face, compressing them, running evaluation, packaging them into ModelCar images, and deploying them on OpenShift AI along with a deployment of Anything LLM.
+A Tekton pipeline for downloading models from Hugging Face, compressing the model weights, running evaluation benchmarks, packaging them into ModelCar images, and deploying them on OpenShift AI, and then running performance benchmarks using [GuideLLM](https://github.com/neuralmagic/guidellm).
 
-![ModelCar Pipeline](assets/pipeline.png)
+
+We tested this pipeline with the `codellama/CodeLlama-34b-Python-hf` model, which is an example of a reasonably large model (34 billion parameters) which performs coding tasks well, but requires multiple GPUs to run (e.g. 4 X NVIDIA L40s).
+
+By running this model through the LLM Compressor, reducing the weights from FP16 precision, to 4 bit precision, this model can be deployed on a single NVIDIA L40.
+
+# Results overview
+
+## Model weight file size
+The first thing we can look at is the reduction in model weight file size, as you can see from the chart below, the total file size of the model weights reduced from 67.5 Gb to 17Gb, a significant reduction.
+
+<img src="assets/file-size.png" alt="Filesize reduction" width="400">
+
+## Benchmarks
+
+The next thing we can look at are the benchmark results.  Quantization maintains comparable performance with the unquantized model across the coding focussed benchmarks humaneval and mbpp.
+
+<img src="assets/benchmarks.png" alt="Benchmark comparison" width="400">
+
+## Throughput
+
+Even though the quantized model is running on 1 GPU (25% of the hardware used by the unquantized model), the model achieves 25–39% of the unquantized throughput.
+
+<img src="assets/throughput.png" alt="Throughput" width="400">
 
 ## Features
 
 - Downloads models from Hugging Face with customizable file patterns
 - Optional model compression using RHAIIS LLM Compressor
-- Runs evaluation using defined eval tasks e.g. gsm8k against original and compressed model, and ouputs results of compressed model.
+- Performs evaluation against deployed model using lm-evaluation-harness
 - Packages models into OCI images using [OLOT](https://github.com/containers/olot)
 - Pushes images to Quay.io
 - Registers models in the OpenShift model registry
-- Deployment as InferenceService with GPU support
-- Waits until the model is deployed to complete pipeline
+- **Deployment as InferenceService with GPU support**
+- **Waits until the model is deployed to complete pipeline**
+- **Performance benchmarking using containerized GuideLLM**
 - Deploys AnythingLLM UI configured to use the deployed model
 - Supports skipping specific tasks
 
+<img src="assets/pipeline.png" alt="ModelCar Pipeline" width="600">
 
 ## Prerequisites
 
@@ -37,14 +61,14 @@ QUAY_PASSWORD="ROBOT_PASSWORD"
 QUAY_REPOSITORY="quay.io/your-org/your-repo"
 
 # Hugging Face token
-HUGGINGFACE_MODEL="meta-llama/Llama-3.3-70B-Instruct"
+HUGGINGFACE_MODEL="codellama/CodeLlama-34b-Python-hf"
 HF_TOKEN="your_huggingface_token"
 
 # Model Registry
 MODEL_REGISTRY_URL="https://model-registry.apps.yourcluster.com"
 
 # Model details
-MODEL_NAME="Llama-3.3-70B-Instruct"
+MODEL_NAME="CodeLlama-34b-Python-hf"
 MODEL_VERSION="1.0.0"
 ```
 
@@ -137,14 +161,28 @@ EOF
 oc create serviceaccount modelcar-pipeline
 ```
 
-### 4. Create OpenShift objects
+### 4. Check resource quotas
 
-First, create a dynamic resource quota file based on the current project name:
+First, check for existing resource quotas that may prevent running containers with large memory requirements:
+
+```bash
+# Check for existing resource quotas in the namespace
+oc get resourcequota
+
+# If quotas exist, review their limits
+oc describe resourcequota
+```
+
+If existing quotas have insufficient limits for large language models (which require significant memory and GPU resources), you may need to contact your cluster administrator to increase the limits or remove restrictive quotas.
+
+Then, create a dynamic resource quota file based on the current project name:
 
 ```bash
 # Get the current project name
 export PROJECT_NAME=$(oc project -q)
+```
 
+```bash
 # Create the resource quota file
 cat <<EOF > openshift/resource-quota.yaml
 apiVersion: v1
@@ -154,18 +192,23 @@ metadata:
 spec:
   hard:
     requests.cpu: "8"
-    requests.memory: 24Gi
+    requests.memory: 64Gi
     limits.cpu: "16"
-    limits.memory: 32Gi
+    limits.memory: 128Gi
     requests.nvidia.com/gpu: "4"
     limits.nvidia.com/gpu: "4"
 EOF
+```
+
+### 5. Create OpenShift objects
 
 # Create all OpenShift objects
+
+```bash
 oc apply -f openshift/
 ```
 
-### 5. Create ConfigMaps
+### 6. Create ConfigMaps
 
 Create the compress-script configmap from the Python file which contains the python code to run the LLM Compression.
 
@@ -187,31 +230,8 @@ Create the registration script ConfigMap:
 oc create configmap register-script --from-file=tasks/register-with-registry/register.py
 ```
 
-Create the evaluation script ConfigMap:
 
-```bash
-# Create the ConfigMap from the evaluation script
-oc create configmap evaluate-script --from-file=evaluate.py=tasks/evaluate/evaluate-script.py
-```
-
-You can create different evaluation script ConfigMaps for different types of evaluations:
-
-```bash
-# Create a script for code evaluation
-oc create configmap code-evaluate-script --from-file=evaluate.py=tasks/evaluate/code-evaluate-script.py
-
-```
-
-Then specify which script to use in your PipelineRun:
-
-```bash
-
-    - name: EVALUATION_SCRIPT
-      value: "code-evaluate-script"  # Use the code evaluation script
-
-```
-
-### 6. Create PipelineRun
+### 7. Create PipelineRun
 
 Create the PipelineRun using environment variables:
 
@@ -224,7 +244,7 @@ metadata:
 spec:
   pipelineRef:
     name: modelcar-pipeline
-  timeout: 3h  # Add a 3-hour timeout
+  timeout: 6h  # Add a 3-hour timeout
   serviceAccountName: modelcar-pipeline
   params:
     - name: HUGGINGFACE_MODEL
@@ -245,8 +265,8 @@ spec:
       value: "true"
     - name: EVALUATE_MODEL
       value: "true"
-    - name: EVALUATION_SCRIPT
-      value: "evaluate-script"  # Use the standard evaluation script
+    - name: GUIDELLM_EVALUATE_MODEL
+      value: "true"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
@@ -267,7 +287,7 @@ spec:
 EOF
 ```
 
-### 7. Verify Deployment
+### 8. Verify Deployment
 
 ```bash
 # Check pipeline status
@@ -283,21 +303,34 @@ oc get pipelinerun
 | `HUGGINGFACE_ALLOW_PATTERNS` | Space-separated list of file patterns to allow (e.g., "*.safetensors *.json *.txt") | "" |
 | `COMPRESS_MODEL` | Whether to compress the model using GPTQ (true/false) | "false" |
 | `EVALUATE_MODEL` | Whether to evaluate the model using lm-evaluation-harness (true/false) | "false" |
+| `GUIDELLM_EVALUATE_MODEL` | Whether to run GuideLLM performance evaluation (true/false) | "false" |
 | `MODEL_NAME` | Name of the model to register in the model registry | - |
 | `MODEL_VERSION` | Version of the model to register | "1.0.0" |
 | `SKIP_TASKS` | Comma-separated list of tasks to skip | "" |
 | `MODEL_REGISTRY_URL` | URL of the model registry service | - |
 | `DEPLOY_MODEL` | Whether to deploy the model as an InferenceService (true/false) | "false" |
-| `EVALUATION_SCRIPT` | Name of the ConfigMap containing the evaluation script | "evaluate-script" |
 
 ### Model Evaluation
 
 When `EVALUATE_MODEL` is set to "true", the pipeline will:
-1. Install vllm and lm-evaluation-harness
-2. Run evaluation using benchmarks defined in the evaluate-script.oy
-4. Output evaluation metrics
+1. Connect to the deployed compressed model InferenceService  
+2. Install lm-evaluation-harness with OpenAI API support
+3. Run evaluation using HumanEval and MBPP benchmarks against the deployed model
+4. Output evaluation metrics to the shared workspace
 
-The evaluation task uses the same GPU resources as the compression task to ensure consistent performance.
+The evaluation task uses the deployed model's endpoint, eliminating the need for local GPU resources and providing evaluation results that reflect real production performance.
+
+### GuideLLM Performance Evaluation
+
+When `GUIDELLM_EVALUATE_MODEL` is set to "true", the pipeline will run performance benchmarks against the deployed compressed model:
+
+The GuideLLM evaluation will:
+- Connect to the deployed compressed model InferenceService
+- Run rate sweep tests with configurable token counts (256 prompt + 128 output tokens)
+- Generate comprehensive performance reports
+- Save results to the shared workspace
+
+This provides realistic performance insights for the deployed quantized model in its actual serving environment.
 
 ### Skipping Tasks
 
@@ -536,64 +569,3 @@ This PipelineRun will:
 4. Register the model in the model registry
 5. Deploy the model as an InferenceService
 6. Deploy the AnythingLLM UI
-
-### Code based evals
-
-Ensure the code-evaluate-script configmap is created.
-```bash
-oc create configmap compress-script --from-file=compress.py=tasks/compress/compress-code.py
-```
-
-```bash
-cat <<EOF | oc create -f -
-apiVersion: tekton.dev/v1beta1
-kind: PipelineRun
-metadata:
-  name: modelcar-coding-python-aggressive
-spec:
-  pipelineRef:
-    name: modelcar-pipeline
-  timeout: 6h
-  serviceAccountName: modelcar-pipeline
-  params:
-    - name: HUGGINGFACE_MODEL
-      value: "${HUGGINGFACE_MODEL}"
-    - name: OCI_IMAGE
-      value: "${QUAY_REPOSITORY}"
-    - name: HUGGINGFACE_ALLOW_PATTERNS
-      value: "*.safetensors *.json *.txt *.md *.model"
-    - name: COMPRESS_MODEL
-      value: "true"
-    - name: MODEL_NAME
-      value: "${MODEL_NAME}"
-    - name: MODEL_VERSION
-      value: "${MODEL_VERSION}"
-    - name: MODEL_REGISTRY_URL
-      value: "${MODEL_REGISTRY_URL}"
-    - name: DEPLOY_MODEL
-      value: "true"
-    - name: EVALUATE_MODEL
-      value: "true"
-    - name: MAX_MODEL_LEN
-      value: "16000"
-    - name: SKIP_TASKS
-      value: "cleanup-workspace,pull-model-from-huggingface"
-  workspaces:
-    - name: shared-workspace
-      persistentVolumeClaim:
-        claimName: modelcar-storage
-    - name: quay-auth-workspace
-      secret:
-        secretName: quay-auth
-  podTemplate:
-    securityContext:
-      runAsUser: 1001
-      fsGroup: 1001
-    tolerations:
-      - key: "nvidia.com/gpu"
-        operator: "Exists"
-        effect: "NoSchedule"
-    nodeSelector:
-      nvidia.com/gpu.present: "true"
-EOF
-```

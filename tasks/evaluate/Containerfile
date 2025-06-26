@@ -1,0 +1,61 @@
+FROM registry.access.redhat.com/ubi9/python-39:latest as builder
+
+USER root
+
+# Install git and other build dependencies
+RUN dnf update -y && \
+    dnf install -y git && \
+    dnf clean all
+
+# Clone GuideLLM repository
+RUN git clone https://github.com/neuralmagic/guidellm.git /src
+
+# Create virtual environment and install GuideLLM
+RUN python3 -m venv /opt/guidellm && \
+    /opt/guidellm/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/guidellm/bin/pip install --no-cache-dir /src
+
+# Install entrypoint script
+RUN install -m0755 /src/deploy/entrypoint.sh /opt/guidellm/bin/entrypoint.sh
+
+FROM registry.access.redhat.com/ubi9/python-39:latest
+
+USER root
+
+# Copy the virtual environment from builder
+COPY --from=builder /opt/guidellm /opt/guidellm
+
+# Update PATH to include guidellm binaries
+ENV PATH="/opt/guidellm/bin:$PATH"
+
+# Create guidellm user and results directory
+RUN useradd -r -m -d /results guidellm && \
+    chown -R guidellm:guidellm /results /opt/guidellm
+
+USER guidellm
+
+WORKDIR /results
+
+# Red Hat and GuideLLM labels
+LABEL name="guidellm-ubi" \
+      version="1.0" \
+      summary="GuideLLM Performance Benchmarking Container (UBI-based)" \
+      description="GuideLLM Performance Benchmarking Container built on Red Hat Universal Base Image" \
+      maintainer="Red Hat AI Customer Adoption and Innovation team (CAI)" \
+      vendor="Red Hat, Inc." \
+      org.opencontainers.image.source="https://github.com/neuralmagic/guidellm" \
+      org.opencontainers.image.description="GuideLLM Performance Benchmarking Container (UBI-based)" \
+      io.k8s.description="GuideLLM Performance Benchmarking Container built on Red Hat Universal Base Image" \
+      io.k8s.display-name="GuideLLM UBI" \
+      io.openshift.tags="ai,llm,benchmark,performance,guidellm"
+
+# GuideLLM configuration environment variables
+ENV GUIDELLM_TARGET="http://localhost:8000" \
+    GUIDELLM_MODEL="neuralmagic/Meta-Llama-3.1-8B-Instruct-quantized.w4a16" \
+    GUIDELLM_RATE_TYPE="sweep" \
+    GUIDELLM_DATA="prompt_tokens=256,output_tokens=128" \
+    GUIDELLM_MAX_REQUESTS="100" \
+    GUIDELLM_MAX_SECONDS="" \
+    GUIDELLM_OUTPUT_PATH="/results/results.json"
+
+ENTRYPOINT [ "/opt/guidellm/bin/entrypoint.sh" ]

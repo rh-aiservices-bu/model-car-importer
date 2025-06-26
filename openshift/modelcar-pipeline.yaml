@@ -40,6 +40,10 @@ spec:
       type: string
       description: "Whether to evaluate the model (true/false)"
       default: "false"
+    - name: GUIDELLM_EVALUATE_MODEL
+      type: string
+      description: "Whether to run GuideLLM performance evaluation (true/false)"
+      default: "false"
     - name: MAX_MODEL_LEN
       type: string
       description: "Maximum model length for vLLM (default: 8192)"
@@ -187,11 +191,35 @@ spec:
           value: "evaluate-model"
         - name: SKIP_TASKS
           value: $(params.SKIP_TASKS)
+        - name: MODEL_NAME
+          value: $(params.MODEL_NAME)
+        - name: MODEL_VERSION
+          value: $(params.MODEL_VERSION)
       workspaces:
         - name: shared-workspace
           workspace: shared-workspace
       runAfter:
         - compress-model
+    - name: guidellm-evaluate-model
+      taskRef:
+        name: guidellm-evaluate-model-containerized
+      timeout: 2h
+      params:
+        - name: GUIDELLM_EVALUATE_MODEL
+          value: $(params.GUIDELLM_EVALUATE_MODEL)
+        - name: SKIP_TASK
+          value: "guidellm-evaluate-model"
+        - name: SKIP_TASKS
+          value: $(params.SKIP_TASKS)
+        - name: MODEL_NAME
+          value: $(params.MODEL_NAME)
+        - name: MODEL_VERSION
+          value: $(params.MODEL_VERSION)
+      workspaces:
+        - name: shared-workspace
+          workspace: shared-workspace
+      runAfter:
+        - wait-for-service
     - name: build-and-push-modelcar
       taskSpec:
         workspaces:
@@ -436,7 +464,7 @@ spec:
                 annotations:
                   openshift.io/display-name: $(params.MODEL_NAME) - $(params.MODEL_VERSION)
                   serving.knative.openshift.io/enablePassthrough: 'true'
-                  serving.kserve.io/deploymentMode: Serverless
+                  serving.kserve.io/deploymentMode: RawDeployment
                   sidecar.istio.io/inject: 'true'
                   sidecar.istio.io/rewriteAppHTTPProbers: 'true'
                 name: $(echo $(params.MODEL_NAME) | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '.' '-' | sed 's/[^a-z0-9-]//g')-$(echo $(params.MODEL_VERSION) | tr '.' '-')

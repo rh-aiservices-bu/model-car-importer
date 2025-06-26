@@ -5,8 +5,8 @@ metadata:
 spec:
   hard:
     requests.cpu: "8"
-    requests.memory: 24Gi
+    requests.memory: 64Gi
     limits.cpu: "16"
-    limits.memory: 32Gi
+    limits.memory: 128Gi
     requests.nvidia.com/gpu: "4"
     limits.nvidia.com/gpu: "4"

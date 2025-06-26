@@ -1,0 +1,135 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: guidellm-evaluate-model-containerized
+spec:
+  workspaces:
+    - name: shared-workspace
+  params:
+    - name: GUIDELLM_EVALUATE_MODEL
+      type: string
+      description: "Whether to run GuideLLM performance evaluation (true/false)"
+      default: "false"
+    - name: SKIP_TASK
+      type: string
+      description: "Name of this task"
+    - name: SKIP_TASKS
+      type: string
+      description: "Comma-separated list of tasks to skip"
+    - name: MODEL_NAME
+      type: string
+      description: "Model name for the deployed service"
+    - name: MODEL_VERSION
+      type: string
+      description: "Model version for the deployed service"
+  stepTemplate:
+    resources:
+      limits:
+        memory: "4Gi"
+        cpu: 1
+      requests:
+        cpu: 1
+        memory: "2Gi"
+  steps:
+    - name: guidellm-evaluate
+      # Use official GuideLLM image or build custom UBI-based image from tasks/evaluate/Containerfile
+      image: quay.io/hayesphilip/guidellm:latest
+      timeout: 2h
+      env:
+        - name: HF_ALLOW_CODE_EVAL
+          value: "1"
+        # GuideLLM container environment variables
+        - name: GUIDELLM_MODEL
+          value: "placeholder"  # Will be set in script
+        - name: GUIDELLM_RATE_TYPE
+          value: "sweep"
+        - name: GUIDELLM_DATA
+          value: "prompt_tokens=256,output_tokens=128"
+        - name: GUIDELLM_MAX_SECONDS
+          value: "180"  # 3 minutes
+        - name: GUIDELLM_OUTPUT_PATH
+          value: "$(workspaces.shared-workspace.path)/guidellm_results.json"
+      script: |
+        #!/bin/bash
+        set -e
+        
+        if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
+          echo "Skipping guidellm-evaluate-model-containerized task"
+          exit 0
+        fi
+        
+        if [ "$(params.GUIDELLM_EVALUATE_MODEL)" = "true" ]; then
+          echo "🚀 Running GuideLLM performance evaluation using containerized approach..."
+          echo "Current directory: $(pwd)"
+          
+          # Build the internal service URL for the deployed model
+          SERVICE_NAME=$(echo $(params.MODEL_NAME) | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '.' '-' | sed 's/[^a-z0-9-]//g')-$(echo $(params.MODEL_VERSION) | tr '.' '-')
+          SERVICE_URL="http://${SERVICE_NAME}-predictor:8080"
+          
+          echo "📡 Using internal service URL: $SERVICE_URL"
+          
+          # Set the target URL for GuideLLM
+          export GUIDELLM_TARGET="$SERVICE_URL/v1"
+          
+          echo "🔧 GuideLLM Configuration:"
+          echo "  Target: $GUIDELLM_TARGET"
+          echo "  Model (for API): $SERVICE_NAME"
+          echo "  Model (for tokenizer): $(params.MODEL_NAME)"
+          echo "  Rate Type: $GUIDELLM_RATE_TYPE"
+          echo "  Data: $GUIDELLM_DATA"
+          echo "  Max Seconds: $GUIDELLM_MAX_SECONDS"
+          echo "  Output: $GUIDELLM_OUTPUT_PATH"
+          
+          # Create results directory
+          mkdir -p $(workspaces.shared-workspace.path)/guidellm_results
+          
+          # Test connection to deployed model first
+          echo "🔌 Testing connection to deployed model..."
+          curl -f "$GUIDELLM_TARGET/models" --max-time 30 || {
+            echo "❌ Could not connect to deployed model at $GUIDELLM_TARGET"
+            exit 1
+          }
+          echo "✅ Successfully connected to deployed model"
+          
+          # Run GuideLLM benchmark - let's check available options first
+          echo "🚀 Starting GuideLLM benchmark..."
+          
+          # Check for local model directory
+          if [ -d "$(workspaces.shared-workspace.path)/model_original" ]; then
+            LOCAL_MODEL_DIR="$(workspaces.shared-workspace.path)/model_original"
+            echo "📁 Using original model directory for tokenizer: $LOCAL_MODEL_DIR"
+          elif [ -d "$(workspaces.shared-workspace.path)/model" ]; then
+            LOCAL_MODEL_DIR="$(workspaces.shared-workspace.path)/model"
+            echo "📁 Using compressed model directory for tokenizer: $LOCAL_MODEL_DIR"
+          else
+            echo "❌ No local model directory found in workspace"
+            echo "Workspace contents:"
+            ls -la $(workspaces.shared-workspace.path)/
+            exit 1
+          fi
+          
+          echo "Running benchmark with local tokenizer..."
+          /opt/guidellm/bin/guidellm benchmark \
+            --target "$GUIDELLM_TARGET" \
+            --model "$SERVICE_NAME" \
+            --processor "$LOCAL_MODEL_DIR" \
+            --rate-type "$GUIDELLM_RATE_TYPE" \
+            --data "$GUIDELLM_DATA" \
+            --max-seconds "$GUIDELLM_MAX_SECONDS" \
+            --output-path "$GUIDELLM_OUTPUT_PATH"
+          
+          # Copy results to shared workspace if they exist
+          if [ -f "/results/results.json" ]; then
+            echo "📋 Copying results to shared workspace..."
+            cp /results/results.json "$GUIDELLM_OUTPUT_PATH"
+            echo "✅ Results saved to: $GUIDELLM_OUTPUT_PATH"
+          else
+            echo "⚠️ No results file found in /results/"
+            ls -la /results/ || echo "Results directory not found"
+          fi
+          
+          echo "✅ GuideLLM evaluation complete!"
+        else
+          echo "Skipping GuideLLM performance evaluation..."
+        fi
+      workingDir: $(workspaces.shared-workspace.path)
