@@ -34,9 +34,9 @@ Even though the quantized model is running on 1 GPU (25% of the hardware used by
 - Packages models into OCI images using [OLOT](https://github.com/containers/olot)
 - Pushes images to Quay.io
 - Registers models in the OpenShift model registry
-- **Deployment as InferenceService with GPU support**
-- **Waits until the model is deployed to complete pipeline**
-- **Performance benchmarking using containerized GuideLLM**
+- Deployment as InferenceService with GPU support
+- Waits until the model is deployed to complete pipeline
+- Performance benchmarking using containerized GuideLLM
 - Deploys AnythingLLM UI configured to use the deployed model
 - Supports skipping specific tasks
 
@@ -44,7 +44,7 @@ Even though the quantized model is running on 1 GPU (25% of the hardware used by
 
 ## Prerequisites
 
-- OpenShift AI cluster with GPU-enabled node (e.g., AWS EC2 g6.12xlarge instance providing 4 x NVIDIA L4 Tensor Core GPUs)
+- OpenShift AI cluster with GPU-enabled node (e.g., AWS EC2 g6e.12xlarge instance providing 4 x NVIDIA L40 Tensor Core GPUs)
 - Access to Quay.io (for pushing images)
 - Access to Hugging Face (for downloading models)
 - OpenShift model registry service
