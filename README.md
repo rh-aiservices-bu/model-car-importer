@@ -173,7 +173,42 @@ oc get resourcequota
 oc describe resourcequota
 ```
 
-If existing quotas have insufficient limits for large language models (which require significant memory and GPU resources), you may need to contact your cluster administrator to increase the limits or remove restrictive quotas.
+If existing quotas have insufficient limits for large language models (which require significant memory and GPU resources), you have several options:
+
+1. **Contact your cluster administrator** to increase the quota limits or remove restrictive quotas
+2. **Delete existing restrictive quotas** if you have sufficient permissions:
+   ```bash
+   # Delete a specific resource quota
+   oc delete resourcequota <quota-name>
+   ```
+3. **Update LimitRange** to allow higher memory limits:
+   ```bash
+   # Check for existing LimitRange
+   oc get limitrange
+   
+   # Edit the LimitRange to increase memory limits
+   oc edit limitrange <limitrange-name>
+   
+   # Update the max memory limits for Container and Pod types:
+   # spec:
+   #   limits:
+   #   - max:
+   #       memory: 128Gi  # Increase this value as needed
+   #     type: Container
+   #   - max:
+   #       memory: 128Gi  # Increase this value as needed
+   #     type: Pod
+   ```
+4. **Skip the compression step** if memory limits are too restrictive:
+   ```bash
+   # Set COMPRESS_MODEL to false and add compress-model to SKIP_TASKS
+   COMPRESS_MODEL="false"
+   SKIP_TASKS="compress-model"
+   ```
+
+**Common error**: If you see errors like `maximum memory usage per Container is 24Gi, but limit is 128Gi`, this indicates your namespace has restrictive resource quotas or LimitRange that prevent the pipeline from running memory-intensive tasks like model compression.
+
+You may need to get your cluster administrator to update the container and pod memory limits to 128Gi.
 
 Then, create a dynamic resource quota file based on the current project name:
 
@@ -220,7 +255,7 @@ The `tasks/compress/compress.py` script:
 - Includes progress tracking and error handling
 
 ```bash
-oc create configmap compress-script --from-file=tasks/compress/compress.py
+oc create configmap compress-script --from-file=compress.py=tasks/compress/compress-code.py
 ```
 
 Create the registration script ConfigMap:
@@ -244,7 +279,7 @@ metadata:
 spec:
   pipelineRef:
     name: modelcar-pipeline
-  timeout: 6h  # Add a 3-hour timeout
+  timeout: 6h  # 6-hour timeout
   serviceAccountName: modelcar-pipeline
   params:
     - name: HUGGINGFACE_MODEL
@@ -313,12 +348,10 @@ oc get pipelinerun
 ### Model Evaluation
 
 When `EVALUATE_MODEL` is set to "true", the pipeline will:
-1. Connect to the deployed compressed model InferenceService  
-2. Install lm-evaluation-harness with OpenAI API support
-3. Run evaluation using HumanEval and MBPP benchmarks against the deployed model
-4. Output evaluation metrics to the shared workspace
+1. Run the compressed model with vllm 
+2. Run evaluation using HumanEval and MBPP benchmarks against the deployed model
+3. Output evaluation metrics to the shared workspace
 
-The evaluation task uses the deployed model's endpoint, eliminating the need for local GPU resources and providing evaluation results that reflect real production performance.
 
 ### GuideLLM Performance Evaluation
 
@@ -424,8 +457,6 @@ oc delete -f openshift/
 
 oc delete configmap compress-script
 oc delete configmap register-script
-oc delete configmap evaluate-script
-
 
 oc delete secret quay-auth
 oc delete secret huggingface-secret

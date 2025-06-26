@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: modelcar-pipeline-core-resource-limits
+  name: modelcar-blog-core-resource-limits
 spec:
   hard:
     requests.cpu: "8"
