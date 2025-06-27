@@ -39,10 +39,6 @@ spec:
       env:
         - name: HF_ALLOW_CODE_EVAL
           value: "1"
-      volumeMounts:
-        - name: evaluate-script
-          mountPath: /workspace/scripts/evaluate.py
-          subPath: evaluate.py
       script: |
         #!/bin/sh
         set -e
@@ -93,10 +89,3 @@ spec:
         else
           echo "Skipping model evaluation..."
         fi
-  volumes:
-    - name: evaluate-script
-      configMap:
-        name: evaluate-script
-        items:
-          - key: evaluate.py
-            path: evaluate.py 

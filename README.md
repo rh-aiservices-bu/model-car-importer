@@ -247,7 +247,7 @@ oc apply -f openshift/
 
 Create the compress-script configmap from the Python file which contains the python code to run the LLM Compression.
 
-The `tasks/compress/compress.py` script:
+The `tasks/compress/compress-code.py` script:
 - Uses the LLM Compressor library to compress the model using GPTQ quantization
 - Configures compression parameters like bits (4-bit quantization) and group size
 - Handles multi-GPU compression for faster processing
