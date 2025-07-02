@@ -36,6 +36,12 @@ spec:
               name: huggingface-secret
               key: HUGGINGFACE_TOKEN
               optional: true
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: huggingface-secret
+              key: HUGGINGFACE_TOKEN
+              optional: true
         - name: PYTORCH_CUDA_ALLOC_CONF
           value: "max_split_size_mb:512"
         - name: CUDA_LAUNCH_BLOCKING

@@ -254,9 +254,6 @@ The `tasks/compress/compress-code.py` script:
 - Saves the compressed model in the same format as the original
 - Includes progress tracking and error handling
 
-```bash
-oc create configmap compress-script --from-file=compress.py=tasks/compress/compress-code.py
-```
 
 Create the registration script ConfigMap:
 
@@ -266,7 +263,13 @@ oc create configmap register-script --from-file=tasks/register-with-registry/reg
 ```
 
 
-### 7. Create PipelineRun
+### 7. Running the pipeline
+
+#### Code tasks models
+
+```bash
+oc create configmap compress-script --from-file=compress.py=tasks/compress/compress-code.py
+```
 
 Create the PipelineRun using environment variables:
 
@@ -302,6 +305,8 @@ spec:
       value: "true"
     - name: GUIDELLM_EVALUATE_MODEL
       value: "true"
+    - name: MAX_MODEL_LEN
+	    value: 16000
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
@@ -321,7 +326,71 @@ spec:
       nvidia.com/gpu.present: "true"
 EOF
 ```
+#### General knowledge models
 
+```bash
+oc create configmap compress-script --from-file=compress.py=tasks/compress/compress.py
+```
+
+Create the PipelineRun using environment variables:
+
+```bash
+cat <<EOF | oc create -f -
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: modelcar-pipelinerun
+spec:
+  pipelineRef:
+    name: modelcar-pipeline
+  timeout: 6h  # 6-hour timeout
+  serviceAccountName: modelcar-pipeline
+  params:
+    - name: HUGGINGFACE_MODEL
+      value: "${HUGGINGFACE_MODEL}"
+    - name: OCI_IMAGE
+      value: "${QUAY_REPOSITORY}"
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      value: "*.safetensors *.json *.txt *.md *.model"
+    - name: COMPRESS_MODEL
+      value: "true"
+    - name: MODEL_NAME
+      value: "${MODEL_NAME}"
+    - name: MODEL_VERSION
+      value: "${MODEL_VERSION}"
+    - name: MODEL_REGISTRY_URL
+      value: "${MODEL_REGISTRY_URL}"
+    - name: DEPLOY_MODEL
+      value: "true"
+    - name: EVALUATE_MODEL
+      value: "true"
+    - name: GUIDELLM_EVALUATE_MODEL
+      value: "true"
+    - name: MAX_MODEL_LEN
+      value: 8000
+    - name: TASKS
+      value: "arc_easy,arc_challenge,hellaswag,winogrande"
+    # - name: SKIP_TASKS
+    #   value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
+  workspaces:
+    - name: shared-workspace
+      persistentVolumeClaim:
+        claimName: modelcar-storage
+    - name: quay-auth-workspace
+      secret:
+        secretName: quay-auth
+  podTemplate:
+    securityContext:
+      runAsUser: 1001
+      fsGroup: 1001
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
+EOF
+```
 ### 8. Verify Deployment
 
 ```bash
@@ -338,6 +407,7 @@ oc get pipelinerun
 | `HUGGINGFACE_ALLOW_PATTERNS` | Space-separated list of file patterns to allow (e.g., "*.safetensors *.json *.txt") | "" |
 | `COMPRESS_MODEL` | Whether to compress the model using GPTQ (true/false) | "false" |
 | `EVALUATE_MODEL` | Whether to evaluate the model using lm-evaluation-harness (true/false) | "false" |
+| `TASKS` | Comma-separated list of evaluation tasks to run (e.g., "arc_easy,hellaswag,winogrande") | "humaneval,mbpp" |
 | `GUIDELLM_EVALUATE_MODEL` | Whether to run GuideLLM performance evaluation (true/false) | "false" |
 | `MODEL_NAME` | Name of the model to register in the model registry | - |
 | `MODEL_VERSION` | Version of the model to register | "1.0.0" |
