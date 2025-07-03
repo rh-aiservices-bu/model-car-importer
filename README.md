@@ -394,10 +394,6 @@ EOF
 
 #### No compression
 
-```bash
-oc create configmap compress-script --from-file=compress.py=tasks/compress/compress.py
-```
-
 Create the PipelineRun using environment variables:
 
 ```bash
@@ -429,9 +425,9 @@ spec:
     - name: DEPLOY_MODEL
       value: "true"
     - name: EVALUATE_MODEL
-      value: "true"
+      value: "false"
     - name: GUIDELLM_EVALUATE_MODEL
-      value: "true"
+      value: "false"
     - name: MAX_MODEL_LEN
       value: 8000
     - name: TASKS
@@ -679,12 +675,15 @@ This PipelineRun will:
 
 ### Pull a model from Hugging Face and deploy without compression or evaluation:
 
+Example: meta-llama/Llama-3.1-8B deployed with custom chat template
+
+
 ```bash
 cat <<EOF | oc create -f -
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  name: modelcar-pull-and-deploy
+  name: modelcar-pull-and-deploy-llama2
 spec:
   pipelineRef:
     name: modelcar-pipeline
@@ -709,6 +708,10 @@ spec:
       value: "true"
     - name: EVALUATE_MODEL
       value: "false"
+    - name: VLLM_ARGS
+      value: "--chat-template /app/data/template/tool_chat_template_llama3.1_json.jinja"
+    # - name: SKIP_TASKS
+    #   value: "cleanup-workspace,pull-model-from-huggingface,build-and-push-modelcar,register-with-registry"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:

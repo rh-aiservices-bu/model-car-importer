@@ -52,6 +52,10 @@ spec:
       type: string
       description: "Maximum model length for vLLM (default: 8192)"
       default: "8192"
+    - name: VLLM_ARGS
+      type: string
+      description: "Additional vLLM arguments (e.g., '--chat-template /path/to/template.jinja --enable-auto-tool-choice')"
+      default: ""
   workspaces:
     - name: shared-workspace
     - name: quay-auth-workspace
@@ -404,6 +408,7 @@ spec:
           - name: SKIP_TASKS
           - name: DEPLOY_MODEL
           - name: MAX_MODEL_LEN
+          - name: VLLM_ARGS
         steps:
           - name: check-deployment
             image: quay.io/openshift/origin-cli:latest
@@ -427,6 +432,23 @@ spec:
                 exit 1
               fi
               # Create ServingRuntime manifest
+              # Build args section step by step
+              echo "args:" > /tmp/vllm_args.txt
+              echo "        - '--port=8080'" >> /tmp/vllm_args.txt
+              echo "        - '--model=/mnt/models'" >> /tmp/vllm_args.txt
+              echo "        - '--served-model-name={{.Name}}'" >> /tmp/vllm_args.txt
+              echo "        - '--max-model-len=$(params.MAX_MODEL_LEN)'" >> /tmp/vllm_args.txt
+              
+              # Add additional vLLM arguments if provided
+              if [ ! -z "$(params.VLLM_ARGS)" ]; then
+                echo "Processing VLLM_ARGS: $(params.VLLM_ARGS)"
+                for arg in $(params.VLLM_ARGS); do
+                  echo "Adding argument: $arg"
+                  echo "        - '$arg'" >> /tmp/vllm_args.txt
+                done
+              fi
+              
+              
               cat > /workspace/shared-workspace/servingruntime.yaml << EOF
               apiVersion: serving.kserve.io/v1alpha1
               kind: ServingRuntime
@@ -454,11 +476,7 @@ spec:
                       - python
                       - '-m'
                       - vllm.entrypoints.openai.api_server
-                    args:
-                      - '--port=8080'
-                      - '--model=/mnt/models'
-                      - '--served-model-name={{.Name}}'
-                      - '--max-model-len=$(params.MAX_MODEL_LEN)'
+                    $(cat /tmp/vllm_args.txt)
                     env:
                       - name: HF_HOME
                         value: /tmp/hf_home
@@ -480,6 +498,9 @@ spec:
                 serviceAccountName: modelcar-pipeline
               EOF
               echo "Created ServingRuntime manifest"
+              echo "=== Final ServingRuntime YAML ==="
+              cat -n /workspace/shared-workspace/servingruntime.yaml
+              echo "=== End of final YAML ==="
               echo "Applying ServingRuntime..."
               oc apply -f /workspace/shared-workspace/servingruntime.yaml
               echo "ServingRuntime created"
@@ -550,6 +571,8 @@ spec:
           value: $(params.DEPLOY_MODEL)
         - name: MAX_MODEL_LEN
           value: $(params.MAX_MODEL_LEN)
+        - name: VLLM_ARGS
+          value: $(params.VLLM_ARGS)
       workspaces:
         - name: shared-workspace
           workspace: shared-workspace
