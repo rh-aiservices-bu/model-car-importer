@@ -40,6 +40,10 @@ spec:
       type: string
       description: "Whether to evaluate the model (true/false)"
       default: "false"
+    - name: TASKS
+      type: string
+      description: "Comma-separated list of evaluation tasks to run (e.g., 'arc_easy,hellaswag,winogrande')"
+      default: "humaneval,mbpp"
     - name: GUIDELLM_EVALUATE_MODEL
       type: string
       description: "Whether to run GuideLLM performance evaluation (true/false)"
@@ -168,6 +172,13 @@ spec:
       taskRef:
         name: compress-model
       timeout: 2h
+      when:
+        - input: $(params.COMPRESS_MODEL)
+          operator: in
+          values: ["true"]
+        - input: $(params.SKIP_TASKS)
+          operator: notin
+          values: ["compress-model"]
       params:
         - name: COMPRESS_MODEL
           value: $(params.COMPRESS_MODEL)
@@ -184,6 +195,13 @@ spec:
       taskRef:
         name: evaluate-model
       timeout: 2h
+      when:
+        - input: $(params.EVALUATE_MODEL)
+          operator: in
+          values: ["true"]
+        - input: $(params.SKIP_TASKS)
+          operator: notin
+          values: ["evaluate-model"]
       params:
         - name: EVALUATE_MODEL
           value: $(params.EVALUATE_MODEL)
@@ -195,6 +213,8 @@ spec:
           value: $(params.MODEL_NAME)
         - name: MODEL_VERSION
           value: $(params.MODEL_VERSION)
+        - name: TASKS
+          value: $(params.TASKS)
       workspaces:
         - name: shared-workspace
           workspace: shared-workspace
@@ -204,6 +224,13 @@ spec:
       taskRef:
         name: guidellm-evaluate-model-containerized
       timeout: 2h
+      when:
+        - input: $(params.GUIDELLM_EVALUATE_MODEL)
+          operator: in
+          values: ["true"]
+        - input: $(params.SKIP_TASKS)
+          operator: notin
+          values: ["guidellm-evaluate-model"]
       params:
         - name: GUIDELLM_EVALUATE_MODEL
           value: $(params.GUIDELLM_EVALUATE_MODEL)
@@ -568,9 +595,12 @@ spec:
               # Get the external URL
               EXTERNAL_URL=$(oc get inferenceservice $SERVICE_NAME -o jsonpath='{.status.url}')
               echo "Service is available at: $EXTERNAL_URL"
+              # Add port 8080 for vLLM service
+              EXTERNAL_URL_WITH_PORT="${EXTERNAL_URL}:8080"
+              echo "Service URL with port: $EXTERNAL_URL_WITH_PORT"
               # Save the URL for future reference
-              echo $EXTERNAL_URL > /workspace/shared-workspace/service_url
-              echo "Service URL saved to workspace"
+              echo $EXTERNAL_URL_WITH_PORT > /workspace/shared-workspace/service_url
+              echo "Service URL with port saved to workspace"
       params:
         - name: MODEL_NAME
           value: $(params.MODEL_NAME)

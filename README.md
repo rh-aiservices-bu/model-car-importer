@@ -278,7 +278,7 @@ cat <<EOF | oc create -f -
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  name: modelcar-pipelinerun
+  name: modelcar-pipelinerun3
 spec:
   pipelineRef:
     name: modelcar-pipeline
@@ -371,7 +371,73 @@ spec:
     - name: TASKS
       value: "arc_easy,arc_challenge,hellaswag,winogrande"
     # - name: SKIP_TASKS
-    #   value: "cleanup-workspace,pull-model-from-huggingface,compress-model"
+    #   value: "cleanup-workspace,pull-model-from-huggingface"
+  workspaces:
+    - name: shared-workspace
+      persistentVolumeClaim:
+        claimName: modelcar-storage
+    - name: quay-auth-workspace
+      secret:
+        secretName: quay-auth
+  podTemplate:
+    securityContext:
+      runAsUser: 1001
+      fsGroup: 1001
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
+EOF
+```
+
+#### No compression
+
+```bash
+oc create configmap compress-script --from-file=compress.py=tasks/compress/compress.py
+```
+
+Create the PipelineRun using environment variables:
+
+```bash
+cat <<EOF | oc create -f -
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: modelcar-pipelinerun
+spec:
+  pipelineRef:
+    name: modelcar-pipeline
+  timeout: 6h  # 6-hour timeout
+  serviceAccountName: modelcar-pipeline
+  params:
+    - name: HUGGINGFACE_MODEL
+      value: "${HUGGINGFACE_MODEL}"
+    - name: OCI_IMAGE
+      value: "${QUAY_REPOSITORY}"
+    - name: HUGGINGFACE_ALLOW_PATTERNS
+      value: "*.safetensors *.json *.txt *.md *.model"
+    - name: COMPRESS_MODEL
+      value: "false"
+    - name: MODEL_NAME
+      value: "${MODEL_NAME}"
+    - name: MODEL_VERSION
+      value: "${MODEL_VERSION}"
+    - name: MODEL_REGISTRY_URL
+      value: "${MODEL_REGISTRY_URL}"
+    - name: DEPLOY_MODEL
+      value: "true"
+    - name: EVALUATE_MODEL
+      value: "true"
+    - name: GUIDELLM_EVALUATE_MODEL
+      value: "true"
+    - name: MAX_MODEL_LEN
+      value: 8000
+    - name: TASKS
+      value: "arc_easy,arc_challenge,hellaswag,winogrande"
+    # - name: SKIP_TASKS
+    #   value: "cleanup-workspace,pull-model-from-huggingface"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:

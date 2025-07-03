@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: modelcar-blog-core-resource-limits
+  name: llama-3-1-8b-core-resource-limits
 spec:
   hard:
     requests.cpu: "8"
