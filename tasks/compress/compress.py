@@ -111,16 +111,14 @@ def tokenize(sample):
 ds = ds.map(tokenize, remove_columns=ds.column_names)
 
 # Configure the quantization algorithm to run.
-# Optimized GPTQ settings for maximum accuracy:
+# GPTQ settings compatible with current llmcompressor version:
 recipe = GPTQModifier(
     targets="Linear", 
     scheme="W4A16", 
     ignore=["lm_head"],
-    group_size=64,           # Smaller group size for better accuracy
     block_size=128,          # Standard block size
     dampening_frac=0.15,     # Higher dampening for stability
     actorder=True,           # Use activation order for better accuracy
-    static_groups=False,     # Dynamic grouping for better compression
     sequential_update=True   # Sequential processing
 )
 

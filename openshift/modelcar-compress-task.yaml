@@ -27,7 +27,7 @@ spec:
         memory: "64Gi"
   steps:
     - name: compress
-      image: quay.io/opendatahub/llmcompressor-workbench:main
+      image: registry.access.redhat.com/ubi9/python-311:latest
       timeout: 4h
       env:
         - name: HUGGINGFACE_TOKEN
@@ -47,7 +47,7 @@ spec:
         - name: CUDA_LAUNCH_BLOCKING
           value: "1"
       script: |
-        #!/bin/sh
+        #!/bin/bash
         set -e
         if [[ ",$(params.SKIP_TASKS)," == *",$(params.SKIP_TASK),"* ]]; then
           echo "Skipping compress-model task"
@@ -56,13 +56,14 @@ spec:
         if [ "$(params.COMPRESS_MODEL)" = "true" ]; then
           echo "Compressing model using llmcompressor..."
           echo "Current directory: $(pwd)"
+          echo "Python version: $(python --version)"
           echo "Listing model directory contents:"
           ls -la /workspace/shared-workspace/model
           
           cd /workspace/shared-workspace/model
-          # Fix version conflicts by installing compatible versions
-          pip install "compressed-tensors==0.9.3" datasets transformers
-          pip install git+https://github.com/vllm-project/llm-compressor.git
+          
+          pip install git+https://github.com/fynnsu/llm-compressor.git
+          
           cp /workspace/compress.py .
           python compress.py
           echo "Model compression complete!"

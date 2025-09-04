@@ -278,7 +278,7 @@ cat <<EOF | oc create -f -
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  name: modelcar-pipelinerun3
+  name: modelcar-pipelinerun-qwen2
 spec:
   pipelineRef:
     name: modelcar-pipeline
@@ -306,7 +306,9 @@ spec:
     - name: GUIDELLM_EVALUATE_MODEL
       value: "true"
     - name: MAX_MODEL_LEN
-	    value: 16000
+      value: 16000
+    - name: SKIP_TASKS
+      value: "cleanup-workspace,pull-model-from-huggingface"
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:

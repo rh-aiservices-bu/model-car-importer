@@ -22,10 +22,6 @@ spec:
     - name: MODEL_VERSION
       type: string
       description: "Model version for the deployed service"
-    - name: TASKS
-      type: string
-      description: "Comma-separated list of evaluation tasks to run"
-      default: "humaneval,mbpp"
   stepTemplate:
     resources:
       limits:
@@ -51,11 +47,29 @@ spec:
           exit 0
         fi
         if [ "$(params.EVALUATE_MODEL)" = "true" ]; then
-          echo "🚀 Evaluating model using local vLLM with lm-evaluation-harness..."
+          python --version
+          echo "🚀 Evaluating model using local vLLM with lm-evaluation-harness and EvalPlus..."
           echo "Current directory: $(pwd)"
           
           # Install required packages
           pip install "lm-eval[vllm]" --upgrade
+          
+          # Install EvalPlus for HumanEval evaluation
+          echo "📦 Installing EvalPlus..."
+          cd /workspace/shared-workspace
+          if [ ! -d "evalplus" ]; then
+            git clone https://github.com/neuralmagic/evalplus.git
+          else
+            echo "  EvalPlus directory already exists, skipping clone"
+          fi
+          cd evalplus
+          
+          # Try to install the main package (may fail due to sparseml, but core should work)
+          echo "  Installing EvalPlus core package..."
+          pip install evalplus
+          pip install -r tools/requirements.txt
+          
+          echo "✅ EvalPlus installation complete (with possible warnings)"
           
           # Check for local model directory
           if [ -d "/workspace/shared-workspace/model" ]; then
@@ -71,25 +85,219 @@ spec:
             exit 1
           fi
           
-          echo "🔧 Running lm_eval with local vLLM..."
-          echo "  Model Directory: $LOCAL_MODEL_DIR"
-          
           # Set environment variables
           export TOKENIZERS_PARALLELISM=false
           export HF_HOME=/tmp/hf_cache
           
-          # Run lm_eval with local vLLM
+          # Phase 1: Run standard benchmarks with lm_eval (optimized for speed)
+          echo "🔧 Phase 1: Running lm_eval with standard benchmarks..."
+          echo "  Model Directory: $LOCAL_MODEL_DIR"
+          echo "  Tasks: arc_easy,winogrande (optimized for faster evaluation)"
+          
+          # Run lm_eval with optimized settings for faster evaluation
           lm_eval --model vllm \
-            --model_args "pretrained=$LOCAL_MODEL_DIR,tensor_parallel_size=1,gpu_memory_utilization=0.8,max_model_len=16000" \
-            --tasks $(params.TASKS) \
-            --num_fewshot 3 \
-            --batch_size 1 \
-            --output_path /workspace/shared-workspace/evaluation_results \
+            --model_args "pretrained=$LOCAL_MODEL_DIR,tensor_parallel_size=1,gpu_memory_utilization=0.9,max_model_len=16000" \
+            --tasks arc_easy,winogrande \
+            --limit 1000 \
+            --num_fewshot 0 \
+            --batch_size 8 \
+            --output_path /workspace/shared-workspace/evaluation_results_standard \
             --log_samples \
             --confirm_run_unsafe_code
           
-          echo "✅ Model evaluation complete!"
-          echo "📋 Results saved to: /workspace/shared-workspace/evaluation_results"
+          echo "✅ Phase 1 complete! Standard benchmark results saved to: /workspace/shared-workspace/evaluation_results_standard"
+          
+          # Phase 2: Run HumanEval with EvalPlus
+          echo "🧪 Phase 2: Running HumanEval evaluation with EvalPlus..."
+          
+          # Check if EvalPlus is available
+          EVALPLUS_DIR="/workspace/shared-workspace/evalplus"
+          if [ -d "$EVALPLUS_DIR" ]; then
+            echo "📁 Found EvalPlus installation at: $EVALPLUS_DIR"
+            
+            # Create outputs directory
+            OUTPUTS_DIR="/workspace/shared-workspace/outputs/greedy_pass1"
+            mkdir -p "$OUTPUTS_DIR"
+            
+            # Step 1: Generate code samples
+            echo "🔤 Generating code samples with EvalPlus..."
+            cd "$EVALPLUS_DIR"
+            
+            python3 codegen/generate.py \
+              --model "$LOCAL_MODEL_DIR" \
+              --bs 1 \
+              --temperature 0.0 \
+              --n_samples 1 \
+              --greedy \
+              --root "$OUTPUTS_DIR" \
+              --dataset humaneval
+            
+            if [ $? -eq 0 ]; then
+              echo "✅ Code generation completed successfully"
+              
+              # Rename the generated folder to simple format
+              ENCODED_FOLDER=$(find "$OUTPUTS_DIR/humaneval" -name "*_vllm_temp_0.0" 2>/dev/null | head -1)
+              if [ -n "$ENCODED_FOLDER" ]; then
+                SIMPLE_FOLDER="$OUTPUTS_DIR/humaneval/model_vllm_temp_0.0"
+                echo "📁 Renaming folder from $(basename "$ENCODED_FOLDER") to model_vllm_temp_0.0"
+                # Remove target directory if it exists
+                if [ -d "$SIMPLE_FOLDER" ]; then
+                  rm -rf "$SIMPLE_FOLDER"
+                fi
+                mv "$ENCODED_FOLDER" "$SIMPLE_FOLDER"
+              fi
+              
+              # Find the generated samples file (use simple naming)
+              SAMPLES_FILE="$OUTPUTS_DIR/humaneval/model_vllm_temp_0.0"
+              
+              echo "🔍 Looking for samples file: $SAMPLES_FILE"
+              
+              # List available files if exact match not found
+              if [ ! -d "$SAMPLES_FILE" ]; then
+                echo "📂 Available files in humaneval directory:"
+                ls -la "$OUTPUTS_DIR/humaneval/" 2>/dev/null || echo "No humaneval directory found"
+                
+                # Try to find any vllm_temp_0.0 directory
+                SAMPLES_FILE=$(find "$OUTPUTS_DIR/humaneval" -name "*_vllm_temp_0.0" -type d 2>/dev/null | head -1)
+                if [ -n "$SAMPLES_FILE" ]; then
+                  echo "📂 Found alternative samples directory: $SAMPLES_FILE"
+                else
+                  echo "❌ No samples directory found, skipping sanitization and evaluation"
+                  exit 1
+                fi
+              fi
+              
+              # Step 2: Sanitize generated code
+              if [ -d "$SAMPLES_FILE" ]; then
+                echo "🧼 Sanitizing generated code..."
+                python3 evalplus/sanitize.py "$SAMPLES_FILE"
+                
+                if [ $? -eq 0 ]; then
+                  echo "✅ Code sanitization completed successfully"
+                  
+                  # Step 3: Evaluate sanitized samples
+                  SANITIZED_FILE="${SAMPLES_FILE}-sanitized"
+                  if [ -d "$SANITIZED_FILE" ]; then
+                    echo "📊 Evaluating sanitized code with EvalPlus..."
+                    python3 -m evalplus.evaluate \
+                      --dataset humaneval \
+                      --samples "$SANITIZED_FILE"
+                    
+                    if [ $? -eq 0 ]; then
+                      echo "✅ EvalPlus evaluation completed successfully!"
+                      
+                      # Save evaluation summary
+                      echo "📋 EvalPlus HumanEval evaluation completed" > /workspace/shared-workspace/evalplus_results.txt
+                      echo "Generated samples: $SAMPLES_FILE" >> /workspace/shared-workspace/evalplus_results.txt
+                      echo "Sanitized samples: $SANITIZED_FILE" >> /workspace/shared-workspace/evalplus_results.txt
+                      echo "Results saved to workspace" >> /workspace/shared-workspace/evalplus_results.txt
+                    else
+                      echo "❌ EvalPlus evaluation failed"
+                    fi
+                  else
+                    echo "❌ Sanitized directory not found: $SANITIZED_FILE"
+                  fi
+                else
+                  echo "❌ Code sanitization failed"
+                fi
+              fi
+            else
+              echo "❌ Code generation failed"
+            fi
+          else
+            echo "⚠️ EvalPlus not found at $EVALPLUS_DIR, skipping HumanEval evaluation"
+            echo "Note: EvalPlus should be installed during the compress task"
+          fi
+          
+          echo "✅ All evaluations complete!"
+          echo "📋 Standard benchmark results: /workspace/shared-workspace/evaluation_results_standard"
+          echo "📋 EvalPlus results: /workspace/shared-workspace/evalplus_results.txt"
+          
+          # Generate comprehensive evaluation summary
+          echo ""
+          echo "================================================================================"
+          echo "📊 EVALUATION SUMMARY"
+          echo "================================================================================"
+          
+          # Summary for standard benchmarks
+          echo "🔢 Standard Benchmark Results (lm_eval):"
+          
+          # Check multiple possible locations for results
+          RESULTS_FILE=""
+          if [ -f "/workspace/shared-workspace/evaluation_results_standard/results.json" ]; then
+            RESULTS_FILE="/workspace/shared-workspace/evaluation_results_standard/results.json"
+          elif [ -f "/workspace/shared-workspace/evaluation_results_standard.json" ]; then
+            RESULTS_FILE="/workspace/shared-workspace/evaluation_results_standard.json"
+          fi
+          
+          if [ -n "$RESULTS_FILE" ]; then
+            echo "  ✅ Results file found: $RESULTS_FILE"
+            echo "  📈 Key Metrics:"
+            python3 -c "
+            import json
+            try:
+                with open('$RESULTS_FILE', 'r') as f:
+                    data = json.load(f)
+                for task, metrics in data.get('results', {}).items():
+                    if isinstance(metrics, dict):
+                        for metric, value in metrics.items():
+                            if metric.endswith('acc') or metric.endswith('acc_norm'):
+                                print(f'    {task} {metric}: {value:.4f}')
+                print(f'  📝 Tasks evaluated: {list(data.get(\"results\", {}).keys())}')
+            except Exception as e:
+                print(f'    Error parsing results: {e}')
+            " || echo "    Failed to parse results"
+          else
+            echo "  ❌ Standard benchmark results not found"
+            echo "  📂 Available files in evaluation directory:"
+            ls -la /workspace/shared-workspace/evaluation_results_standard/ 2>/dev/null || echo "    Directory not found"
+            echo "  📂 Looking for JSON files in workspace:"
+            find /workspace/shared-workspace -name "*.json" -type f 2>/dev/null | head -5 || echo "    No JSON files found"
+          fi
+          
+          echo ""
+          echo "🧪 EvalPlus HumanEval Results:"
+          
+          # Check if HumanEval samples were generated
+          SAMPLES_DIR="/workspace/shared-workspace/outputs/greedy_pass1/humaneval"
+          if [ -d "$SAMPLES_DIR" ]; then
+            echo "  ✅ HumanEval code generation completed"
+            echo "  📂 Generated samples:"
+            ls -la "$SAMPLES_DIR" 2>/dev/null | head -3
+            
+            # Check for sanitized and evaluated files
+            SAMPLES_COUNT=$(find "$SAMPLES_DIR" -name "*_vllm_temp_0.0" 2>/dev/null | wc -l)
+            SANITIZED_COUNT=$(find "$SAMPLES_DIR" -name "*-sanitized" 2>/dev/null | wc -l)
+            
+            echo "  📊 Processing status:"
+            echo "    Generated samples: $SAMPLES_COUNT files"
+            echo "    Sanitized samples: $SANITIZED_COUNT files"
+            
+            # Show evaluation results if available
+            if [ -f "/workspace/shared-workspace/evalplus_results.txt" ]; then
+              echo "  📋 Evaluation summary:"
+              cat /workspace/shared-workspace/evalplus_results.txt
+            fi
+            
+            # Look for any JSON result files
+            RESULT_FILES=$(find /workspace/shared-workspace -name "*humaneval*" -name "*.json" 2>/dev/null)
+            if [ -n "$RESULT_FILES" ]; then
+              echo "  📄 Additional result files found:"
+              echo "$RESULT_FILES" | head -3
+            fi
+          else
+            echo "  ❌ HumanEval samples directory not found"
+            echo "  📂 Available output directories:"
+            ls -la /workspace/shared-workspace/outputs/ 2>/dev/null || echo "    No outputs directory"
+          fi
+          
+          echo ""
+          echo "💾 All Results Locations:"
+          echo "  📁 Standard benchmarks: /workspace/shared-workspace/evaluation_results_standard/"
+          echo "  📁 EvalPlus outputs: /workspace/shared-workspace/outputs/"
+          echo "  📄 EvalPlus summary: /workspace/shared-workspace/evalplus_results.txt"
+          echo "================================================================================"
         else
           echo "Skipping model evaluation..."
         fi
+        

@@ -1,19 +1,15 @@
-from datasets import load_dataset, Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from huggingface_hub import login
-from llmcompressor.modifiers.quantization import GPTQModifier
-from llmcompressor import oneshot
+from transformers import AutoTokenizer
+from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
+from datasets import load_dataset
 import os
-import torch
+import shutil
+from huggingface_hub import login
 
-print('Compress script')
-# Set CUDA_VISIBLE_DEVICES to use all available GPUs
-os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(i) for i in range(torch.cuda.device_count())])
+print('Compress script - simplified AutoGPTQ approach')
 
 # Login to Hugging Face if token is available
 hf_token = os.getenv("HF_TOKEN")
 if hf_token:
-    # Strip any whitespace/newlines from the token
     hf_token = hf_token.strip()
     login(token=hf_token)
     print("✅ Successfully authenticated with Hugging Face")
@@ -29,168 +25,58 @@ compressed_dir = os.path.join(base_dir, 'compressed_model')
 if os.path.exists(original_dir):
     print("Found original model, moving it to model directory for compression")
     if os.path.exists(model_dir):
-        import shutil
         shutil.rmtree(model_dir)
-    import shutil
     shutil.move(original_dir, model_dir)
 else:
     print("No original model found, will compress current model")
 
-# Calculate device map with memory reserved for GPTQ hessians
-num_gpus = torch.cuda.device_count()
-print(f"Found {num_gpus} GPUs available")
+# Configuration
+num_samples = 756
+max_seq_len = 4064
 
-# Create a custom device map that distributes layers across all GPUs
-device_map = {}
-for i in range(num_gpus):
-    device_map[f"cuda:{i}"] = []
-
-# Load model with increased memory limits (128GB available)
-model = AutoModelForCausalLM.from_pretrained(
-    model_dir,
-    device_map="auto",  # Let accelerate handle the distribution
-    torch_dtype=torch.float16,  # Use float16 to save memory
-    low_cpu_mem_usage=True,     # Reduce CPU memory usage during loading
-    max_memory={0: "45GiB", 1: "45GiB", 2: "45GiB", 3: "45GiB", "cpu": "32GiB"},  # More CPU memory available
-)
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
-# Print model device placement
-print("\nModel device placement:")
-for name, param in model.named_parameters():
-    if param.device.type == 'cuda':
-        print(f"{name}: {param.device}")
-
-# Use neuralmagic calibration dataset
-print("Loading neuralmagic LLM compression calibration dataset...")
-
 def preprocess_fn(example):
-    # Handle models with and without chat templates
-    if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template is not None:
-        try:
-            return {"text": tokenizer.apply_chat_template(example["messages"], add_generation_prompt=False, tokenize=False)}
-        except Exception as e:
-            print(f"Chat template failed, using raw message content: {e}")
-            # Fallback to concatenating message content
-            text = " ".join([msg.get("content", "") for msg in example["messages"] if msg.get("content")])
-            return {"text": text}
-    else:
-        # No chat template available, use raw message content
+    try:
+        return {"text": tokenizer.apply_chat_template(example["messages"], add_generation_prompt=False, tokenize=False)}
+    except Exception as e:
+        print(f"Chat template failed: {e}")
+        # Fallback to concatenating message content
         text = " ".join([msg.get("content", "") for msg in example["messages"] if msg.get("content")])
         return {"text": text}
 
+print(f"Loading {num_samples} samples from neuralmagic dataset...")
 ds = load_dataset("neuralmagic/LLM_compression_calibration", split="train")
+ds = ds.shuffle().select(range(num_samples))
 ds = ds.map(preprocess_fn)
 
-print(f"Loaded {len(ds)} samples from neuralmagic/LLM_compression_calibration")
+print(f"Tokenizing {len(ds)} samples...")
+examples = [tokenizer(example["text"], padding=False, max_length=max_seq_len, truncation=True) for example in ds]
 
-NUM_CALIBRATION_SAMPLES = min(len(ds), 1024)  # Use up to 1024 samples for calibration
-MAX_SEQUENCE_LENGTH = 2048   # Increase sequence length for better calibration
-
-# Filter out empty samples  
-ds = ds.filter(lambda x: len(x["text"].strip()) > 0)
-print(f"Using {len(ds)} calibration samples after filtering")
-
-# Tokenize inputs.
-def tokenize(sample):
-    return tokenizer(
-        sample["text"],
-        padding=False,
-        max_length=MAX_SEQUENCE_LENGTH,
-        truncation=True,
-        add_special_tokens=False,
-    )
-
-ds = ds.map(tokenize, remove_columns=ds.column_names)
-
-# Configure the quantization algorithm to run.
-# Optimized GPTQ settings for maximum accuracy:
-recipe = GPTQModifier(
-    targets="Linear", 
-    scheme="W4A16", 
-    ignore=["lm_head"],
-    group_size=64,           # Smaller group size for better accuracy
-    block_size=128,          # Standard block size
-    dampening_frac=0.05,     # Higher dampening for stability
-    actorder=True,           # Use activation order for better accuracy
-    static_groups=False,     # Dynamic grouping for better compression
-    sequential_update=True   # Sequential processing
+quantize_config = BaseQuantizeConfig(
+    bits=4,
+    group_size=128,
+    desc_act=True,
+    model_file_base_name="model",
+    damp_percent=0.1,
 )
 
-# Create required directories for oneshot
-os.makedirs("sparse_logs", exist_ok=True)
-os.makedirs("./offload", exist_ok=True)
+print("Loading model for quantization...")
+model = AutoGPTQForCausalLM.from_pretrained(
+    model_dir,
+    quantize_config,
+    device_map="auto",
+)
 
-# Clear all caches and force garbage collection before compression
-import gc
-torch.cuda.empty_cache()
-gc.collect()
-if hasattr(torch.cuda, 'reset_peak_memory_stats'):
-    torch.cuda.reset_peak_memory_stats()
+print("Starting quantization...")
+model.quantize(examples)
+print("Quantization complete!")
 
-def print_memory_usage():
-    for i in range(torch.cuda.device_count()):
-        allocated = torch.cuda.memory_allocated(i) / 1024**3
-        reserved = torch.cuda.memory_reserved(i) / 1024**3
-        print(f"GPU {i}: {allocated:.2f} GB allocated, {reserved:.2f} GB reserved")
-
-print("Memory usage before compression:")
-print_memory_usage()
-
-# Apply algorithms with ultra-conservative memory settings
-print("Starting compression with minimal memory footprint...")
-try:
-    oneshot(
-        model=model,
-        dataset=ds,
-        recipe=recipe,
-        max_seq_length=MAX_SEQUENCE_LENGTH,
-        num_calibration_samples=NUM_CALIBRATION_SAMPLES,
-        save_compressed=True,  # Save in compressed format
-        splits={"calibration": 1.0},  # Use all data for calibration, no validation split
-    )
-    print("Compression completed successfully!")
-except RuntimeError as e:
-    if "out of memory" in str(e).lower():
-        print(f"OOM Error during compression: {e}")
-        print("Current memory usage:")
-        print_memory_usage()
-        raise
-    else:
-        raise
-
-# Confirm generations of the quantized model look sane.
-print("\n\n")
-print("========== SAMPLE GENERATION ==============")
-try:
-    # Find the device of the first model parameter for proper device placement
-    model_device = next(model.parameters()).device
-    input_ids = tokenizer("Hello my name is", return_tensors="pt").input_ids.to(model_device)
-    
-    # Add attention mask to avoid warnings
-    attention_mask = torch.ones_like(input_ids)
-    
-    with torch.no_grad():
-        output = model.generate(
-            input_ids, 
-            attention_mask=attention_mask,
-            max_new_tokens=50,  # Reduce tokens to avoid device issues
-            do_sample=False,    # Use greedy decoding
-            pad_token_id=tokenizer.eos_token_id
-        )
-    print(tokenizer.decode(output[0], skip_special_tokens=True))
-    print("✅ Sample generation successful!")
-except Exception as e:
-    print(f"⚠️  Sample generation failed (common with multi-GPU setup): {e}")
-    print("This doesn't affect the compressed model - continuing...")
-print("==========================================\n\n")
-
-# Save compressed model
-model.save_pretrained(compressed_dir, save_compressed=True)
+print("Saving quantized model...")
+model.save_pretrained(compressed_dir)
 tokenizer.save_pretrained(compressed_dir)
 
 # Move uncompressed model to model_original (backup)
-import shutil
 shutil.move(model_dir, original_dir)
 
 # Move compressed model to model directory (final location)
